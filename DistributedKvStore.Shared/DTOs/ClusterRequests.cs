@@ -1,0 +1,21 @@
+namespace DistributedKvStore.Shared.DTOs;
+
+public class AddNodeRequest
+{
+    public string BaseUrl { get; set; } = string.Empty;
+}
+
+public class RemoveNodeRequest
+{
+    public Guid NodeId { get; set; }
+}
+
+public class SetReplicationFactorRequest
+{
+    public int ReplicationFactor { get; set; }
+}
+
+public class RestartNodeRequest
+{
+    public Guid NodeId { get; set; }
+}

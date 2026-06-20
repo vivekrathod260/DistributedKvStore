@@ -1,0 +1,15 @@
+using DistributedKvStore.Shared.DTOs;
+using DistributedKvStore.Shared.Models;
+
+namespace DistributedKvStore.Node.Services;
+
+public interface IClusterManagementService
+{
+    Task<ClusterState> StartClusterAsync();
+    Task<ClusterState> AddNodeAsync(string baseUrl);
+    Task<ClusterState> RemoveNodeAsync(Guid nodeId);
+    Task<ClusterState> RestartNodeAsync(Guid nodeId);
+    Task SetReplicationFactorAsync(int factor);
+    Task ShutdownClusterAsync();
+    Task<ClusterState> GetClusterStateAsync();
+}
