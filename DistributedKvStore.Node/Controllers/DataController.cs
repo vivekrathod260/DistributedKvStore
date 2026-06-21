@@ -1,4 +1,4 @@
-using DistributedKvStore.Node.Services;
+using DistributedKvStore.Node.Services.Interfaces;
 using DistributedKvStore.Shared.DTOs;
 using Microsoft.AspNetCore.Mvc;
 

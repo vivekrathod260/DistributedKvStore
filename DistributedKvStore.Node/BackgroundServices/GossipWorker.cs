@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using DistributedKvStore.Node.Services.Implementation.State;
 using DistributedKvStore.Shared.DTOs;
 using DistributedKvStore.Shared.Enums;
 using Microsoft.Extensions.Hosting;
@@ -40,7 +41,7 @@ public class GossipWorker : BackgroundService
     private async Task PerformGossipRoundAsync(CancellationToken cancellationToken)
     {
         using var scope = _serviceProvider.CreateScope();
-        var nodeState = scope.ServiceProvider.GetRequiredService<Services.INodeStateService>();
+        var nodeState = scope.ServiceProvider.GetRequiredService<INodeStateService>();
         var httpClientFactory = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>();
 
         if (!nodeState.IsInitialized) return;

@@ -1,9 +1,10 @@
 using System.Net.Http.Json;
+using DistributedKvStore.Node.Services.Interfaces;
 using DistributedKvStore.Shared.DTOs;
 using DistributedKvStore.Shared.Models;
 using Microsoft.Extensions.Logging;
 
-namespace DistributedKvStore.Node.Services;
+namespace DistributedKvStore.Node.Services.Implementation.DataExchange;
 
 public class ReplicationService : IReplicationService
 {

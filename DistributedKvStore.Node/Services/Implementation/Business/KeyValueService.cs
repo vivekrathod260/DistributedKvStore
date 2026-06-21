@@ -1,10 +1,12 @@
 using DistributedKvStore.Node.Data;
+using DistributedKvStore.Node.Services.Implementation.State;
+using DistributedKvStore.Node.Services.Interfaces;
 using DistributedKvStore.Shared.DTOs;
 using DistributedKvStore.Shared.Enums;
 using DistributedKvStore.Shared.Models;
 using Microsoft.Extensions.Logging;
 
-namespace DistributedKvStore.Node.Services;
+namespace DistributedKvStore.Node.Services.Implementation.Business;
 
 public class KeyValueService : IKeyValueService
 {
@@ -121,37 +123,6 @@ public class KeyValueService : IKeyValueService
         _ = Task.Run(() => ReplicateAsync(key, null, OperationType.Delete, timestamp, operationId, hash));
     }
 
-    public async Task ApplyReplicationAsync(ReplicationRequest request)
-    {
-        if (request.OperationType == OperationType.Delete)
-        {
-            await _repository.DeleteAsync(request.Key, request.TimestampUtc);
-        }
-        else
-        {
-            var record = new KeyValueRecord
-            {
-                Key = request.Key,
-                Value = request.Value ?? string.Empty,
-                Hash = request.Hash,
-                LastUpdatedUtc = request.TimestampUtc,
-                IsDeleted = false
-            };
-
-            await _repository.PutAsync(record);
-        }
-
-        var operation = new OperationLog
-        {
-            Key = request.Key,
-            Value = request.Value,
-            OperationType = request.OperationType,
-            TimestampUtc = request.TimestampUtc
-        };
-
-        await _repository.ApplyOperationAsync(operation);
-    }
-
     private async Task ReplicateAsync(string key, string? value, OperationType opType, DateTime timestamp, long operationId, ulong hash)
     {
         try
@@ -181,5 +152,36 @@ public class KeyValueService : IKeyValueService
         {
             _logger.LogWarning(ex, "Replication failed for key {Key}. Recovery sync will handle it.", key);
         }
+    }
+
+    public async Task ApplyReplicationAsync(ReplicationRequest request)
+    {
+        if (request.OperationType == OperationType.Delete)
+        {
+            await _repository.DeleteAsync(request.Key, request.TimestampUtc);
+        }
+        else
+        {
+            var record = new KeyValueRecord
+            {
+                Key = request.Key,
+                Value = request.Value ?? string.Empty,
+                Hash = request.Hash,
+                LastUpdatedUtc = request.TimestampUtc,
+                IsDeleted = false
+            };
+
+            await _repository.PutAsync(record);
+        }
+
+        var operation = new OperationLog
+        {
+            Key = request.Key,
+            Value = request.Value,
+            OperationType = request.OperationType,
+            TimestampUtc = request.TimestampUtc
+        };
+
+        await _repository.ApplyOperationAsync(operation);
     }
 }

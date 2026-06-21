@@ -1,4 +1,6 @@
 using System.Net.Http.Json;
+using DistributedKvStore.Node.Services.Implementation.State;
+using DistributedKvStore.Node.Services.Interfaces;
 using DistributedKvStore.Shared.DTOs;
 using DistributedKvStore.Shared.Enums;
 using Microsoft.Extensions.Hosting;
@@ -44,8 +46,8 @@ public class HeartbeatService : BackgroundService
     private async Task CheckHeartbeatsAsync(CancellationToken cancellationToken)
     {
         using var scope = _serviceProvider.CreateScope();
-        var nodeState = scope.ServiceProvider.GetRequiredService<Services.INodeStateService>();
-        var gossipService = scope.ServiceProvider.GetRequiredService<Services.IGossipService>();
+        var nodeState = scope.ServiceProvider.GetRequiredService<INodeStateService>();
+        var gossipService = scope.ServiceProvider.GetRequiredService<IGossipService>();
         var httpClientFactory = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>();
 
         if (!nodeState.IsInitialized) return;

@@ -4,6 +4,19 @@ using DistributedKvStore.Shared.Models;
 
 namespace DistributedKvStore.Node.Data;
 
+public interface IDataRepository
+{
+    Task<KeyValueRecord?> GetAsync(string key);
+    Task PutAsync(KeyValueRecord record);
+    Task DeleteAsync(string key, DateTime timestampUtc);
+    Task<long> ApplyOperationAsync(OperationLog operation);
+    Task<long> GetLastOperationIdAsync();
+    Task<List<OperationLog>> GetOperationsAfterAsync(long afterOperationId);
+    Task<List<KeyValueRecord>> GetRecordsInHashRangeAsync(ulong rangeStart, ulong rangeEnd);
+    Task BulkInsertRecordsAsync(IEnumerable<KeyValueRecord> records);
+    Task DeleteRecordsInHashRangeAsync(ulong rangeStart, ulong rangeEnd);
+}
+
 public class SqliteDataRepository : IDataRepository
 {
     private readonly IDbContextFactory<NodeDbContext> _contextFactory;
@@ -59,15 +72,6 @@ public class SqliteDataRepository : IDataRepository
         }
     }
 
-    public async Task<List<OperationLog>> GetOperationsAfterAsync(long afterOperationId)
-    {
-        await using var context = await _contextFactory.CreateDbContextAsync();
-        return await context.OperationLogs
-            .AsNoTracking()
-            .Where(o => o.OperationId > afterOperationId)
-            .OrderBy(o => o.OperationId)
-            .ToListAsync();
-    }
 
     public async Task<long> ApplyOperationAsync(OperationLog operation)
     {
@@ -85,6 +89,17 @@ public class SqliteDataRepository : IDataRepository
             .FirstOrDefaultAsync();
         return lastOp?.OperationId ?? 0;
     }
+
+    public async Task<List<OperationLog>> GetOperationsAfterAsync(long afterOperationId)
+    {
+        await using var context = await _contextFactory.CreateDbContextAsync();
+        return await context.OperationLogs
+            .AsNoTracking()
+            .Where(o => o.OperationId > afterOperationId)
+            .OrderBy(o => o.OperationId)
+            .ToListAsync();
+    }
+
 
     public async Task<List<KeyValueRecord>> GetRecordsInHashRangeAsync(ulong rangeStart, ulong rangeEnd)
     {
@@ -105,28 +120,6 @@ public class SqliteDataRepository : IDataRepository
                 .Where(r => r.Hash >= rangeStart || r.Hash <= rangeEnd)
                 .ToListAsync();
         }
-    }
-
-    public async Task DeleteRecordsInHashRangeAsync(ulong rangeStart, ulong rangeEnd)
-    {
-        await using var context = await _contextFactory.CreateDbContextAsync();
-
-        List<KeyValueRecord> records;
-        if (rangeStart <= rangeEnd)
-        {
-            records = await context.KeyValueRecords
-                .Where(r => r.Hash >= rangeStart && r.Hash <= rangeEnd)
-                .ToListAsync();
-        }
-        else
-        {
-            records = await context.KeyValueRecords
-                .Where(r => r.Hash >= rangeStart || r.Hash <= rangeEnd)
-                .ToListAsync();
-        }
-
-        context.KeyValueRecords.RemoveRange(records);
-        await context.SaveChangesAsync();
     }
 
     public async Task BulkInsertRecordsAsync(IEnumerable<KeyValueRecord> records)
@@ -152,6 +145,28 @@ public class SqliteDataRepository : IDataRepository
             }
         }
 
+        await context.SaveChangesAsync();
+    }
+
+    public async Task DeleteRecordsInHashRangeAsync(ulong rangeStart, ulong rangeEnd)
+    {
+        await using var context = await _contextFactory.CreateDbContextAsync();
+
+        List<KeyValueRecord> records;
+        if (rangeStart <= rangeEnd)
+        {
+            records = await context.KeyValueRecords
+                .Where(r => r.Hash >= rangeStart && r.Hash <= rangeEnd)
+                .ToListAsync();
+        }
+        else
+        {
+            records = await context.KeyValueRecords
+                .Where(r => r.Hash >= rangeStart || r.Hash <= rangeEnd)
+                .ToListAsync();
+        }
+
+        context.KeyValueRecords.RemoveRange(records);
         await context.SaveChangesAsync();
     }
 }

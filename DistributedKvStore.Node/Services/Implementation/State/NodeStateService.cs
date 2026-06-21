@@ -2,7 +2,7 @@ using DistributedKvStore.Shared.Enums;
 using DistributedKvStore.Shared.Hashing;
 using DistributedKvStore.Shared.Models;
 
-namespace DistributedKvStore.Node.Services;
+namespace DistributedKvStore.Node.Services.Implementation.State;
 
 public interface INodeStateService
 {

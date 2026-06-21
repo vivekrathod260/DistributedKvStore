@@ -1,10 +1,12 @@
 using System.Collections.Concurrent;
 using System.Net.Http.Json;
+using DistributedKvStore.Node.Services.Implementation.State;
+using DistributedKvStore.Node.Services.Interfaces;
 using DistributedKvStore.Shared.DTOs;
 using DistributedKvStore.Shared.Enums;
 using Microsoft.Extensions.Logging;
 
-namespace DistributedKvStore.Node.Services;
+namespace DistributedKvStore.Node.Services.Implementation.Communication;
 
 public class GossipService : IGossipService
 {

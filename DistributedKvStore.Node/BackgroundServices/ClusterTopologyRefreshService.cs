@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using DistributedKvStore.Node.Services.Implementation.State;
 using DistributedKvStore.Shared.Enums;
 using DistributedKvStore.Shared.Models;
 using Microsoft.Extensions.Hosting;
@@ -40,7 +41,7 @@ public class ClusterTopologyRefreshService : BackgroundService
     private async Task RefreshTopologyAsync(CancellationToken cancellationToken)
     {
         using var scope = _serviceProvider.CreateScope();
-        var nodeState = scope.ServiceProvider.GetRequiredService<Services.INodeStateService>();
+        var nodeState = scope.ServiceProvider.GetRequiredService<INodeStateService>();
         var httpClientFactory = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>();
 
         if (!nodeState.IsInitialized) return;

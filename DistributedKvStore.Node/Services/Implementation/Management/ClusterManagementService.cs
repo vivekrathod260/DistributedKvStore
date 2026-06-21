@@ -1,11 +1,13 @@
 using System.Net.Http.Json;
+using DistributedKvStore.Node.Services.Implementation.State;
+using DistributedKvStore.Node.Services.Interfaces;
 using DistributedKvStore.Shared.DTOs;
 using DistributedKvStore.Shared.Enums;
 using DistributedKvStore.Shared.Hashing;
 using DistributedKvStore.Shared.Models;
 using Microsoft.Extensions.Logging;
 
-namespace DistributedKvStore.Node.Services;
+namespace DistributedKvStore.Node.Services.Implementation.Management;
 
 public class ClusterManagementService : IClusterManagementService
 {

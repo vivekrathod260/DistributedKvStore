@@ -1,6 +1,6 @@
 using DistributedKvStore.Shared.DTOs;
 
-namespace DistributedKvStore.Node.Services;
+namespace DistributedKvStore.Node.Services.Interfaces;
 
 public interface IGossipService
 {

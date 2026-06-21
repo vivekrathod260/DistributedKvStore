@@ -1,6 +1,11 @@
 using DistributedKvStore.Node.BackgroundServices;
 using DistributedKvStore.Node.Data;
-using DistributedKvStore.Node.Services;
+using DistributedKvStore.Node.Services.Implementation.Business;
+using DistributedKvStore.Node.Services.Implementation.Communication;
+using DistributedKvStore.Node.Services.Implementation.DataExchange;
+using DistributedKvStore.Node.Services.Implementation.Management;
+using DistributedKvStore.Node.Services.Implementation.State;
+using DistributedKvStore.Node.Services.Interfaces;
 using DistributedKvStore.Shared.Hashing;
 using Microsoft.EntityFrameworkCore;
 

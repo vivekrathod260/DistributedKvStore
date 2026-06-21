@@ -1,5 +1,6 @@
 using DistributedKvStore.Node.Data;
-using DistributedKvStore.Node.Services;
+using DistributedKvStore.Node.Services.Implementation.State;
+using DistributedKvStore.Node.Services.Interfaces;
 using DistributedKvStore.Shared.DTOs;
 using DistributedKvStore.Shared.Models;
 using Microsoft.AspNetCore.Mvc;
