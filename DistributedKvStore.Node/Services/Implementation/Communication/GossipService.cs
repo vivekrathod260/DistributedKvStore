@@ -26,23 +26,7 @@ public class GossipService : IGossipService
         _logger = logger;
     }
 
-    public async Task BroadcastNodeStatusChangeAsync(List<NodeStatusChange> changes)
-    {
-        var currentNode = _nodeState.GetCurrentNode();
-        var version = _nodeState.IncrementVersion();
-
-        var message = new GossipMessage
-        {
-            MessageId = Guid.NewGuid(),
-            ClusterVersion = version,
-            SenderNodeId = currentNode.NodeId,
-            NodeStatusChanges = changes,
-            TimestampUtc = DateTime.UtcNow
-        };
-
-        await BroadcastGossipAsync(message);
-    }
-
+    // #################### Core Method: Broadcast a gossip message to a random subset of peers
     public async Task BroadcastGossipAsync(GossipMessage message)
     {
         _processedMessages[message.MessageId] = DateTime.UtcNow;
@@ -86,14 +70,67 @@ public class GossipService : IGossipService
         _processedMessages[message.MessageId] = DateTime.UtcNow;
         CleanupOldMessages();
 
-        // Apply state changes
-        foreach (var change in message.NodeStatusChanges)
+        if(message.Topic == GossipTopic.NodeStatusChange && message.Payload.NodeStatusChanges != null)
         {
-            ApplyNodeStatusChange(change, message.ClusterVersion);
+            // Apply state changes
+            foreach (var change in message.Payload.NodeStatusChanges!)
+            {
+                ApplyNodeStatusChange(change, message.ClusterVersion);
+            }
         }
 
         // Forward to other nodes
         await ForwardGossipAsync(message);
+    }
+
+    private async Task ForwardGossipAsync(GossipMessage message)
+    {
+        var currentNode = _nodeState.GetCurrentNode();
+        var clusterState = _nodeState.GetClusterState();
+
+        var peers = clusterState.Nodes
+            .Where(n => n.NodeId != currentNode.NodeId
+                        && n.NodeId != message.SenderNodeId
+                        && n.Status == NodeStatus.Online)
+            .ToList();
+
+        // Forward to random subset (fan-out)
+        var forwardTo = peers.OrderBy(_ => Random.Shared.Next()).Take(3).ToList();
+        var tasks = forwardTo.Select(peer => SendGossipToNodeAsync(message, peer.BaseUrl));
+        await Task.WhenAll(tasks);
+    }
+
+    private void CleanupOldMessages()
+    {
+        var cutoff = DateTime.UtcNow - MessageRetention;
+        var expired = _processedMessages.Where(kv => kv.Value < cutoff).Select(kv => kv.Key).ToList();
+        foreach (var id in expired)
+        {
+            _processedMessages.TryRemove(id, out _);
+        }
+    }
+
+
+    // ####################### Utility Methods
+    public async Task BroadcastNodeStatusChangeAsync(List<NodeStatusChange> changes)
+    {
+        var currentNode = _nodeState.GetCurrentNode();
+        var version = _nodeState.IncrementVersion();
+
+        var message = new GossipMessage
+        {
+            MessageId = Guid.NewGuid(),
+            ClusterVersion = version,
+            SenderNodeId = currentNode.NodeId,
+            Topic = GossipTopic.NodeStatusChange,
+            Payload = new GossipPayload
+            {
+                NodeStatusChanges = changes
+            },
+            TimestampUtc = DateTime.UtcNow
+        };
+
+        await BroadcastGossipAsync(message);
     }
 
     private void ApplyNodeStatusChange(NodeStatusChange change, long clusterVersion)
@@ -130,32 +167,5 @@ public class GossipService : IGossipService
             ReplicationFactor = clusterState.ReplicationFactor,
             Nodes = _nodeState.GetClusterState().Nodes
         });
-    }
-
-    private async Task ForwardGossipAsync(GossipMessage message)
-    {
-        var currentNode = _nodeState.GetCurrentNode();
-        var clusterState = _nodeState.GetClusterState();
-
-        var peers = clusterState.Nodes
-            .Where(n => n.NodeId != currentNode.NodeId
-                        && n.NodeId != message.SenderNodeId
-                        && n.Status == NodeStatus.Online)
-            .ToList();
-
-        // Forward to random subset (fan-out)
-        var forwardTo = peers.OrderBy(_ => Random.Shared.Next()).Take(3).ToList();
-        var tasks = forwardTo.Select(peer => SendGossipToNodeAsync(message, peer.BaseUrl));
-        await Task.WhenAll(tasks);
-    }
-
-    private void CleanupOldMessages()
-    {
-        var cutoff = DateTime.UtcNow - MessageRetention;
-        var expired = _processedMessages.Where(kv => kv.Value < cutoff).Select(kv => kv.Key).ToList();
-        foreach (var id in expired)
-        {
-            _processedMessages.TryRemove(id, out _);
-        }
     }
 }

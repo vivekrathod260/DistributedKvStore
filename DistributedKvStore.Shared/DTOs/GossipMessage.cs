@@ -7,8 +7,14 @@ public class GossipMessage
     public Guid MessageId { get; set; }
     public long ClusterVersion { get; set; }
     public Guid SenderNodeId { get; set; }
-    public List<NodeStatusChange> NodeStatusChanges { get; set; } = new();
+    public GossipTopic Topic { get; set; }
+    public GossipPayload Payload { get; set; } = new(); 
     public DateTime TimestampUtc { get; set; }
+}
+
+public class GossipPayload
+{
+    public List<NodeStatusChange>? NodeStatusChanges { get; set; } = new();
 }
 
 public class NodeStatusChange
