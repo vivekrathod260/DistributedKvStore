@@ -1,9 +1,6 @@
-using System.Net.Http.Json;
 using DistributedKvStore.Node.Services.Implementation.State;
 using DistributedKvStore.Shared.Enums;
 using DistributedKvStore.Shared.Models;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 
 namespace DistributedKvStore.Node.BackgroundServices;
 
@@ -52,6 +49,7 @@ public class ClusterTopologyRefreshService : BackgroundService
         var peers = clusterState.Nodes
             .Where(n => n.NodeId != currentNode.NodeId && n.Status == NodeStatus.Online)
             .OrderBy(_ => Random.Shared.Next())
+            .Take(3)
             .ToList();
 
         foreach (var peer in peers)
@@ -62,8 +60,7 @@ public class ClusterTopologyRefreshService : BackgroundService
                 client.BaseAddress = new Uri(peer.BaseUrl);
                 client.Timeout = TimeSpan.FromSeconds(5);
 
-                var response = await client.GetFromJsonAsync<ClusterState>(
-                    "/api/cluster/state", cancellationToken);
+                var response = await client.GetFromJsonAsync<ClusterState>("/api/cluster/state", cancellationToken);
 
                 if (response != null && response.Version > clusterState.Version)
                 {
