@@ -45,7 +45,6 @@ builder.Services.AddHttpClient("InternalNode", client =>
 
 // Background Services
 builder.Services.AddHostedService<HeartbeatService>();
-builder.Services.AddHostedService<GossipWorker>();
 builder.Services.AddHostedService<RecoverySyncService>();
 builder.Services.AddHostedService<ClusterTopologyRefreshService>();
 
