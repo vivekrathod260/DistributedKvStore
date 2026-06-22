@@ -26,6 +26,54 @@ public class GossipService : IGossipService
         _logger = logger;
     }
 
+    public async Task BroadcastNodeStatusChangeAsync(List<NodeStatusChange> changes)
+    {
+        var currentNode = _nodeState.GetCurrentNode();
+        var version = _nodeState.IncrementVersion();
+
+        var message = new GossipMessage
+        {
+            MessageId = Guid.NewGuid(),
+            ClusterVersion = version,
+            SenderNodeId = currentNode.NodeId,
+            NodeStatusChanges = changes,
+            TimestampUtc = DateTime.UtcNow
+        };
+
+        await BroadcastGossipAsync(message);
+    }
+
+    public async Task BroadcastGossipAsync(GossipMessage message)
+    {
+        _processedMessages[message.MessageId] = DateTime.UtcNow;
+
+        var currentNode = _nodeState.GetCurrentNode();
+        var clusterState = _nodeState.GetClusterState();
+
+        var somePeers = clusterState.Nodes
+            .Where(n => n.NodeId != currentNode.NodeId && n.Status == NodeStatus.Online)
+            .OrderBy(_ => Random.Shared.Next()).Take(3).ToList();
+
+        var tasks = somePeers.Select(peer => SendGossipToNodeAsync(message, peer.BaseUrl));
+        await Task.WhenAll(tasks);
+    }
+
+    private async Task SendGossipToNodeAsync(GossipMessage message, string baseUrl)
+    {
+        try
+        {
+            var client = _httpClientFactory.CreateClient("InternalNode");
+            client.BaseAddress = new Uri(baseUrl);
+            client.Timeout = TimeSpan.FromSeconds(3);
+
+            await client.PostAsJsonAsync("/internal/gossip", message);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to send gossip to {BaseUrl}", baseUrl);
+        }
+    }
+
     public async Task ProcessGossipMessageAsync(GossipMessage message)
     {
         // Deduplicate
@@ -46,38 +94,6 @@ public class GossipService : IGossipService
 
         // Forward to other nodes
         await ForwardGossipAsync(message);
-    }
-
-    public async Task BroadcastGossipAsync(GossipMessage message)
-    {
-        _processedMessages[message.MessageId] = DateTime.UtcNow;
-
-        var currentNode = _nodeState.GetCurrentNode();
-        var clusterState = _nodeState.GetClusterState();
-
-        var peers = clusterState.Nodes
-            .Where(n => n.NodeId != currentNode.NodeId && n.Status == NodeStatus.Online)
-            .ToList();
-
-        var tasks = peers.Select(peer => SendGossipToNodeAsync(message, peer.BaseUrl));
-        await Task.WhenAll(tasks);
-    }
-
-    public async Task BroadcastNodeStatusChangeAsync(List<NodeStatusChange> changes)
-    {
-        var currentNode = _nodeState.GetCurrentNode();
-        var version = _nodeState.IncrementVersion();
-
-        var message = new GossipMessage
-        {
-            MessageId = Guid.NewGuid(),
-            ClusterVersion = version,
-            SenderNodeId = currentNode.NodeId,
-            NodeStatusChanges = changes,
-            TimestampUtc = DateTime.UtcNow
-        };
-
-        await BroadcastGossipAsync(message);
     }
 
     private void ApplyNodeStatusChange(NodeStatusChange change, long clusterVersion)
@@ -131,22 +147,6 @@ public class GossipService : IGossipService
         var forwardTo = peers.OrderBy(_ => Random.Shared.Next()).Take(3).ToList();
         var tasks = forwardTo.Select(peer => SendGossipToNodeAsync(message, peer.BaseUrl));
         await Task.WhenAll(tasks);
-    }
-
-    private async Task SendGossipToNodeAsync(GossipMessage message, string baseUrl)
-    {
-        try
-        {
-            var client = _httpClientFactory.CreateClient("InternalNode");
-            client.BaseAddress = new Uri(baseUrl);
-            client.Timeout = TimeSpan.FromSeconds(3);
-
-            await client.PostAsJsonAsync("/internal/gossip", message);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Failed to send gossip to {BaseUrl}", baseUrl);
-        }
     }
 
     private void CleanupOldMessages()
