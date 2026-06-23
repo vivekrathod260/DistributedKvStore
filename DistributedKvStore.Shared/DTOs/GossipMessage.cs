@@ -15,6 +15,7 @@ public class GossipMessage
 public class GossipPayload
 {
     public List<NodeStatusChange>? NodeStatusChanges { get; set; } = new();
+    public NodeSuspicionMessage? NodeSuspicionMessage { get; set; }
 }
 
 public class NodeStatusChange

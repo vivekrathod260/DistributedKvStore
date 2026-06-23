@@ -88,7 +88,7 @@ public class PingService : BackgroundService
             }
         }
 
-        await MarkNodeSuspectAsync(targetNode, nodeState, gossipService);
+        await gossipService.BroadcastNodeSuspicionAsync(targetNode);
     }
 
     private async Task<bool> IsNodeReachableAsync(
@@ -131,7 +131,6 @@ public class PingService : BackgroundService
 
         _logger.LogInformation("Node {NodeId} is reachable", node.NodeId);
         nodeState.UpdateNodeStatus(node.NodeId, NodeStatus.Online);
-        nodeState.IncrementVersion();
 
         await gossipService.BroadcastNodeStatusChangeAsync(new List<NodeStatusChange>
         {
@@ -145,26 +144,4 @@ public class PingService : BackgroundService
         });
     }
 
-    private async Task MarkNodeSuspectAsync(ClusterNodeInfo node, INodeStateService nodeState, IGossipService gossipService)
-    {
-        if (node.Status == NodeStatus.Suspect)
-        {
-            return;
-        }
-
-        _logger.LogWarning("Node {NodeId} is suspect", node.NodeId);
-        nodeState.UpdateNodeStatus(node.NodeId, NodeStatus.Suspect);
-        nodeState.IncrementVersion();
-
-        await gossipService.BroadcastNodeStatusChangeAsync(new List<NodeStatusChange>
-        {
-            new()
-            {
-                NodeId = node.NodeId,
-                NewStatus = NodeStatus.Suspect,
-                BaseUrl = node.BaseUrl,
-                HashPosition = node.HashPosition
-            }
-        });
-    }
 }
