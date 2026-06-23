@@ -1,24 +1,21 @@
-using System.Net.Http.Json;
 using DistributedKvStore.Node.Services.Implementation.State;
 using DistributedKvStore.Node.Services.Interfaces;
 using DistributedKvStore.Shared.DTOs;
 using DistributedKvStore.Shared.Enums;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 
 namespace DistributedKvStore.Node.BackgroundServices;
 
-public class HeartbeatService : BackgroundService
+public class PingService : BackgroundService
 {
     private readonly IServiceProvider _serviceProvider;
-    private readonly ILogger<HeartbeatService> _logger;
-    private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(5);
+    private readonly ILogger<PingService> _logger;
+    private static readonly TimeSpan PingInterval = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan SuspectThreshold = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan FailedThreshold = TimeSpan.FromSeconds(30);
 
     private readonly Dictionary<Guid, DateTime> _lastHeartbeat = new();
 
-    public HeartbeatService(IServiceProvider serviceProvider, ILogger<HeartbeatService> logger)
+    public PingService(IServiceProvider serviceProvider, ILogger<PingService> logger)
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
@@ -39,7 +36,7 @@ public class HeartbeatService : BackgroundService
                 _logger.LogError(ex, "Heartbeat check failed");
             }
 
-            await Task.Delay(HeartbeatInterval, stoppingToken);
+            await Task.Delay(PingInterval, stoppingToken);
         }
     }
 

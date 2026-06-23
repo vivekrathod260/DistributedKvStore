@@ -1,9 +1,13 @@
 using DistributedKvStore.Node.Data;
+using DistributedKvStore.Node.Services.Implementation.Communication;
 using DistributedKvStore.Node.Services.Implementation.State;
 using DistributedKvStore.Node.Services.Interfaces;
 using DistributedKvStore.Shared.DTOs;
+using DistributedKvStore.Shared.Enums;
 using DistributedKvStore.Shared.Models;
 using Microsoft.AspNetCore.Mvc;
+using System.Net.Http;
+using System.Threading;
 
 namespace DistributedKvStore.Node.Controllers;
 
@@ -15,6 +19,7 @@ public class InternalController : ControllerBase
     private readonly IGossipService _gossipService;
     private readonly INodeStateService _nodeState;
     private readonly IDataRepository _repository;
+    private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<InternalController> _logger;
 
     public InternalController(
@@ -22,12 +27,14 @@ public class InternalController : ControllerBase
         IGossipService gossipService,
         INodeStateService nodeState,
         IDataRepository repository,
+        IHttpClientFactory httpClientFactory,
         ILogger<InternalController> logger)
     {
         _kvService = kvService;
         _gossipService = gossipService;
         _nodeState = nodeState;
         _repository = repository;
+        _httpClientFactory = httpClientFactory;
         _logger = logger;
     }
 
@@ -96,17 +103,36 @@ public class InternalController : ControllerBase
         return Ok(response);
     }
 
-    [HttpGet("heartbeat")]
-    public IActionResult Heartbeat()
+    [HttpGet("ping")]
+    public IActionResult Ping()
     {
         var currentNode = _nodeState.GetCurrentNode();
         var clusterState = _nodeState.GetClusterState();
 
-        return Ok(new HeartbeatResponse
+        return Ok(new PingResponse
         {
             NodeId = currentNode.NodeId,
+            IsInitialized = _nodeState.IsInitialized,
             ClusterVersion = clusterState.Version,
             TimestampUtc = DateTime.UtcNow
         });
+    }
+
+    [HttpPost("proxy-ping")]
+    public async Task<IActionResult> ProxyPing(ProxyPingRequest request)
+    {
+        var client = _httpClientFactory.CreateClient("InternalNode");
+        client.BaseAddress = new Uri(request.TargetNode.BaseUrl);
+        client.Timeout = TimeSpan.FromSeconds(3);
+
+        var response = await client.GetAsync("/internal/ping");
+        if (response.IsSuccessStatusCode)
+        {
+            return Ok(await response.Content.ReadFromJsonAsync<PingResponse>());
+        }
+        else
+        {
+            return StatusCode((int)response.StatusCode, await response.Content.ReadAsStringAsync());
+        }
     }
 }
