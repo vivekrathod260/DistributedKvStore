@@ -1,11 +1,9 @@
 using System.Collections.Concurrent;
-using System.Net.Http.Json;
 using DistributedKvStore.Node.Services.Implementation.State;
 using DistributedKvStore.Node.Services.Interfaces;
 using DistributedKvStore.Shared.DTOs;
 using DistributedKvStore.Shared.Enums;
 using DistributedKvStore.Shared.Models;
-using Microsoft.Extensions.Logging;
 
 namespace DistributedKvStore.Node.Services.Implementation.Communication;
 
@@ -17,10 +15,7 @@ public class GossipService : IGossipService
     private readonly ConcurrentDictionary<string, DateTime> _processedMessages = new();
     private static readonly TimeSpan MessageRetention = TimeSpan.FromMinutes(5);
 
-    public GossipService(
-        INodeStateService nodeState,
-        IHttpClientFactory httpClientFactory,
-        ILogger<GossipService> logger)
+    public GossipService(INodeStateService nodeState, IHttpClientFactory httpClientFactory, ILogger<GossipService> logger)
     {
         _nodeState = nodeState;
         _httpClientFactory = httpClientFactory;
@@ -30,7 +25,7 @@ public class GossipService : IGossipService
     // #################### Core Method: Broadcast a gossip message to a random subset of peers
     public async Task BroadcastGossipAsync(GossipMessage message)
     {
-        _processedMessages[GetDeduplicationKey(message)] = DateTime.UtcNow;
+        _processedMessages[GetMessageKey(message)] = DateTime.UtcNow;
 
         var currentNode = _nodeState.GetCurrentNode();
         var clusterState = _nodeState.GetClusterState();
@@ -61,17 +56,18 @@ public class GossipService : IGossipService
 
     public async Task ProcessGossipMessageAsync(GossipMessage message)
     {
-        var dedupKey = GetDeduplicationKey(message);
+        var msgKey = GetMessageKey(message);
 
-        if (_processedMessages.ContainsKey(dedupKey))
+        if (_processedMessages.ContainsKey(msgKey))
         {
             _logger.LogDebug("Ignoring duplicate gossip message {MessageId}", message.MessageId);
             return;
         }
 
-        _processedMessages[dedupKey] = DateTime.UtcNow;
+        _processedMessages[msgKey] = DateTime.UtcNow;
         CleanupOldMessages();
 
+        // Process the message based on its topic
         if (message.Topic == GossipTopic.NodeStatusChange && message.Payload.NodeStatusChanges != null)
         {
             foreach (var change in message.Payload.NodeStatusChanges!)
@@ -83,8 +79,16 @@ public class GossipService : IGossipService
             return;
         }
 
-        if (message.Topic == GossipTopic.SuspectCheck && message.Payload.NodeSuspicionMessage != null)
+        if (message.Topic == GossipTopic.SuspectDetected && message.Payload.NodeSuspicionMessage != null)
         {
+            bool suspectAlreadyProcessed = message.Payload.NodeSuspicionMessage.Processors
+                                            .Contains(_nodeState.GetCurrentNode().NodeId);
+            if (suspectAlreadyProcessed)
+            {
+                _logger.LogDebug("Ignoring suspect gossip message {MessageId} as this node has already reported", message.MessageId);
+                return;
+            }
+
             await ProcessSuspectCheckAsync(message);
             return;
         }
@@ -105,6 +109,17 @@ public class GossipService : IGossipService
         var forwardTo = peers.OrderBy(_ => Random.Shared.Next()).Take(3).ToList();
         var tasks = forwardTo.Select(peer => SendGossipToNodeAsync(message, peer.BaseUrl));
         await Task.WhenAll(tasks);
+    }
+
+    private string GetMessageKey(GossipMessage message)
+    {
+        if (message.Topic == GossipTopic.SuspectDetected && message.Payload.NodeSuspicionMessage != null)
+        {
+            var reporters = string.Join(',', message.Payload.NodeSuspicionMessage.Reporters.Distinct().OrderBy(id => id));
+            return $"{message.Topic}:{message.MessageId:N}:{reporters}";
+        }
+
+        return $"{message.Topic}:{message.MessageId:N}";
     }
 
     private void CleanupOldMessages()
@@ -159,7 +174,7 @@ public class GossipService : IGossipService
         }
         else if (change.NewStatus == NodeStatus.Online || change.NewStatus == NodeStatus.Joining)
         {
-            _nodeState.AddNode(new Shared.Models.ClusterNodeInfo
+            _nodeState.AddNode(new ClusterNodeInfo
             {
                 NodeId = change.NodeId,
                 BaseUrl = change.BaseUrl ?? string.Empty,
@@ -168,7 +183,7 @@ public class GossipService : IGossipService
             });
         }
 
-        _nodeState.UpdateClusterState(new Shared.Models.ClusterState
+        _nodeState.UpdateClusterState(new ClusterState
         {
             Version = clusterVersion,
             ReplicationFactor = clusterState.ReplicationFactor,
@@ -188,12 +203,13 @@ public class GossipService : IGossipService
             MessageId = Guid.NewGuid(),
             ClusterVersion = version,
             SenderNodeId = currentNode.NodeId,
-            Topic = GossipTopic.SuspectCheck,
+            Topic = GossipTopic.SuspectDetected,
             Payload = new GossipPayload
             {
                 NodeSuspicionMessage = new NodeSuspicionMessage
                 {
                     SuspectedNode = suspectedNode,
+                    Processors = new List<Guid> { currentNode.NodeId },
                     Reporters = new List<Guid> { currentNode.NodeId }
                 }
             },
@@ -202,7 +218,6 @@ public class GossipService : IGossipService
 
         await BroadcastGossipAsync(message);
     }
-
 
     private async Task ProcessSuspectCheckAsync(GossipMessage message)
     {
@@ -216,41 +231,57 @@ public class GossipService : IGossipService
             return;
         }
 
+        var processors = suspicion.Processors.Distinct().ToList();
+        if (!processors.Contains(currentNode.NodeId))
+        {
+            processors.Add(currentNode.NodeId);
+        }
+
+        suspicion.Processors = processors;
+        message.SenderNodeId = currentNode.NodeId;
+
         if (await IsNodeReachableAsync(suspectedNode))
         {
             if (suspectedNode.Status == NodeStatus.Suspect || suspectedNode.Status == NodeStatus.Failed)
             {
                 await MarkNodeOnlineAsync(suspectedNode);
             }
-
             return;
         }
-
-        var reporters = suspicion.Reporters.Distinct().ToList();
-        if (!reporters.Contains(currentNode.NodeId))
+        else
         {
-            reporters.Add(currentNode.NodeId);
+            var reporters = suspicion.Reporters.Distinct().ToList();
+            if (!reporters.Contains(currentNode.NodeId))
+            {
+                reporters.Add(currentNode.NodeId);
+            }
+
+            suspicion.Reporters = reporters;
+
+            if (HasMajorityReporters(reporters, clusterState.Nodes))
+            {
+                _logger.LogWarning(
+                    "Node {NodeId} reached failure quorum with reporters {ReporterCount}/{NodeCount}",
+                    suspectedNode.NodeId,
+                    reporters.Count,
+                    clusterState.Nodes.Count);
+
+                await MarkNodeFailedAsync(suspectedNode);
+                return;
+            }
+
+            _nodeState.UpdateNodeStatus(suspectedNode.NodeId, NodeStatus.Suspect);
+            _nodeState.IncrementVersion();
         }
 
-        suspicion.Reporters = reporters;
-        message.SenderNodeId = currentNode.NodeId;
+        // Forward the suspicion message to other nodes that haven't processed it yet
+        var peers = clusterState.Nodes
+            .Where(n => n.Status == NodeStatus.Online && suspicion.Processors.Contains(n.NodeId) == false)
+            .ToList();
 
-        if (HasMajorityReporters(reporters, clusterState.Nodes))
-        {
-            _logger.LogWarning(
-                "Node {NodeId} reached failure quorum with reporters {ReporterCount}/{NodeCount}",
-                suspectedNode.NodeId,
-                reporters.Count,
-                clusterState.Nodes.Count);
-
-            await MarkNodeFailedAsync(suspectedNode);
-            return;
-        }
-
-        _nodeState.UpdateNodeStatus(suspectedNode.NodeId, NodeStatus.Suspect);
-        _nodeState.IncrementVersion();
-
-        await BroadcastGossipAsync(message);
+        var forwardTo = peers.OrderBy(_ => Random.Shared.Next()).Take(2).ToList();
+        var tasks = forwardTo.Select(peer => SendGossipToNodeAsync(message, peer.BaseUrl));
+        await Task.WhenAll(tasks);
     }
 
     private bool HasMajorityReporters(IReadOnlyCollection<Guid> reporters, IReadOnlyCollection<ClusterNodeInfo> clusterNodes)
@@ -300,7 +331,8 @@ public class GossipService : IGossipService
         client.Timeout = TimeSpan.FromSeconds(3);
 
         var directResponse = await client.GetAsync("/internal/ping", cancellationToken);
-        if (directResponse.IsSuccessStatusCode)
+
+        if (directResponse.IsSuccessStatusCode && ((await directResponse.Content.ReadFromJsonAsync<PingResponse>())?.IsInitialized ?? false))
         {
             return true;
         }
@@ -311,7 +343,7 @@ public class GossipService : IGossipService
         var proxyNodes = clusterState.Nodes
             .Where(n => n.NodeId != currentNode.NodeId && n.NodeId != node.NodeId && n.Status == NodeStatus.Online)
             .OrderBy(_ => Random.Shared.Next())
-            .Take(Random.Shared.Next(2, 4))
+            .Take(3)
             .ToList();
 
         foreach (var proxyNode in proxyNodes)
@@ -337,16 +369,5 @@ public class GossipService : IGossipService
         }, cancellationToken);
 
         return response.IsSuccessStatusCode && ((await response.Content.ReadFromJsonAsync<PingResponse>())?.IsInitialized ?? false);
-    }
-
-    private string GetDeduplicationKey(GossipMessage message)
-    {
-        if (message.Topic == GossipTopic.SuspectCheck && message.Payload.NodeSuspicionMessage != null)
-        {
-            var reporters = string.Join(',', message.Payload.NodeSuspicionMessage.Reporters.Distinct().OrderBy(id => id));
-            return $"{message.Topic}:{message.MessageId:N}:{reporters}";
-        }
-
-        return $"{message.Topic}:{message.MessageId:N}";
     }
 }
