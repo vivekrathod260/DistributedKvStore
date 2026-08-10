@@ -3,8 +3,8 @@ namespace DistributedKvStore.Shared.Enums;
 public enum NodeStatus
 {
     Online = 0,
-    Suspect = 1,
-    Failed = 2,
-    Leaving = 3,
-    Joining = 4
+    Joining = 1,
+    Suspect = 2,
+    Failed = 3,
+    Leaving = 4,
 }

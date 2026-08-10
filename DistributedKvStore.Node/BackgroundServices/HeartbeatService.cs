@@ -3,6 +3,7 @@ using DistributedKvStore.Node.Services.Implementation.State;
 using DistributedKvStore.Node.Services.Interfaces;
 using DistributedKvStore.Shared.DTOs;
 using DistributedKvStore.Shared.Enums;
+using DistributedKvStore.Shared.Models;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -13,8 +14,8 @@ public class HeartbeatService : BackgroundService
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<HeartbeatService> _logger;
     private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan SuspectThreshold = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan FailedThreshold = TimeSpan.FromSeconds(30);
+    private const int ProxyCount = 3;
 
     private readonly Dictionary<Guid, DateTime> _lastHeartbeat = new();
 
@@ -57,81 +58,140 @@ public class HeartbeatService : BackgroundService
 
         var peers = clusterState.Nodes
             .Where(n => n.NodeId != currentNode.NodeId && n.Status != NodeStatus.Leaving)
-            .ToList();
+            .ToList(); // Joining, Online, Suspect only
 
-        foreach (var peer in peers)
+        foreach (var node in peers)
         {
-            try
-            {
-                var client = httpClientFactory.CreateClient("InternalNode");
-                client.BaseAddress = new Uri(peer.BaseUrl);
-                client.Timeout = TimeSpan.FromSeconds(3);
+            var reachable = await PingDirectlyAsync(node, httpClientFactory, cancellationToken);
 
-                var response = await client.GetAsync("/internal/heartbeat", cancellationToken);
-                if (response.IsSuccessStatusCode)
+            if (reachable) // Online
+            {
+                _lastHeartbeat[node.NodeId] = DateTime.UtcNow;
+
+                // If node was suspect, mark it back online
+                if (node.Status == NodeStatus.Suspect)
                 {
-                    _lastHeartbeat[peer.NodeId] = DateTime.UtcNow;
-
-                    // If node was suspect, mark it back online
-                    if (peer.Status == NodeStatus.Suspect)
+                    nodeState.UpdateNodeStatus(node.NodeId, NodeStatus.Online);
+                    nodeState.IncrementVersion();
+                    await gossipService.BroadcastNodeStatusChangeAsync(new List<NodeStatusChange>
                     {
-                        nodeState.UpdateNodeStatus(peer.NodeId, NodeStatus.Online);
-                        nodeState.IncrementVersion();
-                        await gossipService.BroadcastNodeStatusChangeAsync(new List<NodeStatusChange>
+                        new()
                         {
-                            new()
-                            {
-                                NodeId = peer.NodeId,
-                                NewStatus = NodeStatus.Online,
-                                BaseUrl = peer.BaseUrl,
-                                HashPosition = peer.HashPosition
-                            }
-                        });
-                    }
-
-                    continue;
+                            NodeId = node.NodeId,
+                            NewStatus = NodeStatus.Online,
+                            BaseUrl = node.BaseUrl,
+                            HashPosition = node.HashPosition
+                        }
+                    });
                 }
+
+                continue;
             }
-            catch
+            else // Proxy heartbeat check
             {
-                // Node unreachable
+                reachable = await IsReachableViaProxiesAsync(node, currentNode, clusterState, httpClientFactory, cancellationToken);
             }
 
-            // Evaluate failure state
-            if (!_lastHeartbeat.TryGetValue(peer.NodeId, out var lastSeen))
+            // Both direct and indirect probes failed - mark suspect right away
+            if (node.Status != NodeStatus.Suspect && node.Status != NodeStatus.Failed)
             {
-                _lastHeartbeat[peer.NodeId] = DateTime.UtcNow;
+                _logger.LogWarning("Node {NodeId} marked as SUSPECT (direct and indirect heartbeat failed)", node.NodeId);
+
+                nodeState.UpdateNodeStatus(node.NodeId, NodeStatus.Suspect);
+                nodeState.IncrementVersion();
+
+                await gossipService.BroadcastNodeStatusChangeAsync(new List<NodeStatusChange>
+                {
+                    new() { NodeId = node.NodeId, NewStatus = NodeStatus.Suspect }
+                });
+            }
+
+            // Escalate to failed once the node has been unreachable for too long
+            if (!_lastHeartbeat.TryGetValue(node.NodeId, out var lastSeen))
+            {
+                _lastHeartbeat[node.NodeId] = DateTime.UtcNow;
                 lastSeen = DateTime.UtcNow;
             }
 
             var timeSinceLastHeartbeat = DateTime.UtcNow - lastSeen;
 
-            if (timeSinceLastHeartbeat > FailedThreshold && peer.Status != NodeStatus.Failed)
+            if (timeSinceLastHeartbeat > FailedThreshold && node.Status != NodeStatus.Failed)
             {
-                _logger.LogWarning("Node {NodeId} marked as FAILED (no heartbeat for {Seconds}s)",
-                    peer.NodeId, timeSinceLastHeartbeat.TotalSeconds);
+                _logger.LogWarning("Node {NodeId} marked as FAILED (no confirmed heartbeat for {Seconds}s)",
+                    node.NodeId, timeSinceLastHeartbeat.TotalSeconds);
 
-                nodeState.UpdateNodeStatus(peer.NodeId, NodeStatus.Failed);
+                nodeState.UpdateNodeStatus(node.NodeId, NodeStatus.Failed);
                 nodeState.IncrementVersion();
 
                 await gossipService.BroadcastNodeStatusChangeAsync(new List<NodeStatusChange>
                 {
-                    new() { NodeId = peer.NodeId, NewStatus = NodeStatus.Failed }
+                    new() { NodeId = node.NodeId, NewStatus = NodeStatus.Failed }
                 });
             }
-            else if (timeSinceLastHeartbeat > SuspectThreshold && peer.Status == NodeStatus.Online)
-            {
-                _logger.LogWarning("Node {NodeId} marked as SUSPECT (no heartbeat for {Seconds}s)",
-                    peer.NodeId, timeSinceLastHeartbeat.TotalSeconds);
+        }
+    }
 
-                nodeState.UpdateNodeStatus(peer.NodeId, NodeStatus.Suspect);
-                nodeState.IncrementVersion();
+    private async Task<bool> PingDirectlyAsync(ClusterNodeInfo node, IHttpClientFactory httpClientFactory, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var client = httpClientFactory.CreateClient("InternalNode");
+            client.BaseAddress = new Uri(node.BaseUrl);
+            client.Timeout = TimeSpan.FromSeconds(3);
 
-                await gossipService.BroadcastNodeStatusChangeAsync(new List<NodeStatusChange>
-                {
-                    new() { NodeId = peer.NodeId, NewStatus = NodeStatus.Suspect }
-                });
-            }
+            var response = await client.GetAsync("/internal/heartbeat", cancellationToken);
+            return response.IsSuccessStatusCode;
+        }
+        catch
+        {
+            // Node unreachable
+            return false;
+        }
+    }
+
+    private async Task<bool> IsReachableViaProxiesAsync(
+        ClusterNodeInfo target,
+        ClusterNodeInfo currentNode,
+        ClusterState clusterState,
+        IHttpClientFactory httpClientFactory,
+        CancellationToken cancellationToken)
+    {
+        var proxies = clusterState.Nodes
+            .Where(n => n.NodeId != currentNode.NodeId && n.NodeId != target.NodeId && n.Status == NodeStatus.Online)
+            .OrderBy(_ => Random.Shared.Next())
+            .Take(ProxyCount)
+            .ToList();
+
+        if (proxies.Count == 0) return false;
+
+        var tasks = proxies.Select(proxy => AskProxyToHeartbeatAsync(proxy, target, httpClientFactory, cancellationToken));
+        var results = await Task.WhenAll(tasks);
+        return results.Any(reachable => reachable);
+    }
+
+    private async Task<bool> AskProxyToHeartbeatAsync(
+        ClusterNodeInfo proxy,
+        ClusterNodeInfo target,
+        IHttpClientFactory httpClientFactory,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var client = httpClientFactory.CreateClient("InternalNode");
+            client.BaseAddress = new Uri(proxy.BaseUrl);
+            client.Timeout = TimeSpan.FromSeconds(3);
+
+            var response = await client.PostAsJsonAsync("/internal/heartbeat-proxy", new ProxyHeartbeatRequest { TargetNodeId = target.NodeId }, cancellationToken);
+
+            if (!response.IsSuccessStatusCode) return false;
+
+            var result = await response.Content.ReadFromJsonAsync<ProxyHeartbeatResponse>(cancellationToken);
+            return result?.Reachable ?? false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Indirect heartbeat via proxy {ProxyNodeId} for target {TargetNodeId} failed", proxy.NodeId, target.NodeId);
+            return false;
         }
     }
 }

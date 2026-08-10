@@ -15,6 +15,7 @@ public class InternalController : ControllerBase
     private readonly IGossipService _gossipService;
     private readonly INodeStateService _nodeState;
     private readonly IDataRepository _repository;
+    private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<InternalController> _logger;
 
     public InternalController(
@@ -22,12 +23,14 @@ public class InternalController : ControllerBase
         IGossipService gossipService,
         INodeStateService nodeState,
         IDataRepository repository,
+        IHttpClientFactory httpClientFactory,
         ILogger<InternalController> logger)
     {
         _kvService = kvService;
         _gossipService = gossipService;
         _nodeState = nodeState;
         _repository = repository;
+        _httpClientFactory = httpClientFactory;
         _logger = logger;
     }
 
@@ -108,5 +111,33 @@ public class InternalController : ControllerBase
             ClusterVersion = clusterState.Version,
             TimestampUtc = DateTime.UtcNow
         });
+    }
+
+    [HttpPost("heartbeat-proxy")]
+    public async Task<IActionResult> HeartbeatProxy([FromBody] ProxyHeartbeatRequest request)
+    {
+        try
+        {
+            var client = _httpClientFactory.CreateClient("InternalNode");
+            
+            var clusterState = _nodeState.GetClusterState();
+            var targetNode = clusterState.Nodes.FirstOrDefault(n => n.NodeId == request.TargetNodeId);
+            if (targetNode == null)
+            {
+                _logger.LogWarning("Target node {TargetNodeId} not found in cluster state", request.TargetNodeId);
+                return Ok(new ProxyHeartbeatResponse { Reachable = false });
+            }
+
+            client.BaseAddress = new Uri(targetNode.BaseUrl);
+            client.Timeout = TimeSpan.FromSeconds(3);
+
+            var response = await client.GetAsync("/internal/heartbeat");
+            return Ok(new ProxyHeartbeatResponse { Reachable = response.IsSuccessStatusCode });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Proxy heartbeat to {TargetNodeId} failed", request.TargetNodeId);
+            return Ok(new ProxyHeartbeatResponse { Reachable = false });
+        }
     }
 }
