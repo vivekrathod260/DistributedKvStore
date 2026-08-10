@@ -15,6 +15,7 @@ public class GossipService : IGossipService
     private readonly ILogger<GossipService> _logger;
     private readonly ConcurrentDictionary<Guid, DateTime> _processedMessages = new();
     private static readonly TimeSpan MessageRetention = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan SuspectVerificationWindow = TimeSpan.FromSeconds(15);
 
     public GossipService(
         INodeStateService nodeState,
@@ -77,6 +78,10 @@ public class GossipService : IGossipService
             {
                 ApplyNodeStatusChange(change, message.ClusterLastUpdatedAt);
             }
+        }
+        else if (message.Topic == GossipTopic.NodeSuspicion && message.Payload.NodeSuspicion != null)
+        {
+            ApplyNodeSuspicion(message.Payload.NodeSuspicion, message.ClusterLastUpdatedAt);
         }
 
         // Forward to other nodes
@@ -167,5 +172,114 @@ public class GossipService : IGossipService
             ReplicationFactor = clusterState.ReplicationFactor,
             Nodes = _nodeState.GetClusterState().Nodes
         });
+    }
+
+    public async Task BroadcastNodeSuspicionAsync(Guid suspectedNodeId, List<Guid> verifierNodeIds)
+    {
+        var currentNode = _nodeState.GetCurrentNode();
+        var lastUpdatedAt = _nodeState.TouchLastUpdated();
+
+        var message = new GossipMessage
+        {
+            MessageId = Guid.NewGuid(),
+            ClusterLastUpdatedAt = lastUpdatedAt,
+            SenderNodeId = currentNode.NodeId,
+            Topic = GossipTopic.NodeSuspicion,
+            Payload = new GossipPayload
+            {
+                NodeSuspicion = new NodeSuspicionInfo
+                {
+                    SuspectedNodeId = suspectedNodeId,
+                    VerifierNodeIds = verifierNodeIds
+                }
+            },
+            TimestampUtc = DateTime.UtcNow
+        };
+
+        await BroadcastGossipAsync(message);
+    }
+
+    private void ApplyNodeSuspicion(NodeSuspicionInfo suspicion, DateTime clusterLastUpdatedAt)
+    {
+        var clusterState = _nodeState.GetClusterState();
+
+        if (clusterLastUpdatedAt <= clusterState.ClusterLastUpdatedAt)
+            return;
+
+        var targetNode = clusterState.Nodes.FirstOrDefault(n => n.NodeId == suspicion.SuspectedNodeId);
+        if (targetNode == null)
+            return;
+
+        _nodeState.UpdateNodeStatus(suspicion.SuspectedNodeId, NodeStatus.Suspect);
+
+        _logger.LogWarning("Node {NodeId} marked as SUSPECT via gossip (verifiers: {VerifierNodeIds})", suspicion.SuspectedNodeId, string.Join(", ", suspicion.VerifierNodeIds));
+
+        _nodeState.UpdateClusterState(new Shared.Models.ClusterState
+        {
+            ClusterLastUpdatedAt = clusterLastUpdatedAt,
+            ReplicationFactor = clusterState.ReplicationFactor,
+            Nodes = _nodeState.GetClusterState().Nodes
+        });
+
+        var currentNode = _nodeState.GetCurrentNode();
+        if (suspicion.VerifierNodeIds.Contains(currentNode.NodeId))
+        {
+            _ = Task.Run(() => VerifySuspectedNodeAsync(targetNode));
+        }
+    }
+
+    private async Task VerifySuspectedNodeAsync(Shared.Models.ClusterNodeInfo targetNode)
+    {
+        var delay = TimeSpan.FromMilliseconds(Random.Shared.Next(0, (int)SuspectVerificationWindow.TotalMilliseconds));
+        await Task.Delay(delay);
+
+        var clusterState = _nodeState.GetClusterState();
+
+        var suspectNode = clusterState.Nodes
+            .Where(n => n.NodeId == targetNode.NodeId)
+            .FirstOrDefault();
+
+        if(suspectNode?.Status == NodeStatus.Online) return;
+
+        var reachable = await PingNodeAsync(targetNode.BaseUrl);
+
+        if(reachable)
+        {
+            _logger.LogInformation("Verification ping to suspected node {NodeId} succeeded; broadcasting online status", targetNode.NodeId);
+
+            await BroadcastNodeStatusChangeAsync(new List<NodeStatusChange>
+            {
+                new()
+                {
+                    NodeId = targetNode.NodeId,
+                    NewStatus = NodeStatus.Online,
+                    BaseUrl = targetNode.BaseUrl,
+                    HashPosition = targetNode.HashPosition
+                }
+            });
+        }
+        else
+        {
+            // No reply from the suspected node - do nothing for now.
+            _logger.LogDebug("Verification ping to suspected node {NodeId} got no reply", targetNode.NodeId);
+            return;
+        }
+    }
+
+    private async Task<bool> PingNodeAsync(string baseUrl)
+    {
+        try
+        {
+            var client = _httpClientFactory.CreateClient("InternalNode");
+            client.BaseAddress = new Uri(baseUrl);
+            client.Timeout = TimeSpan.FromSeconds(3);
+
+            var response = await client.GetAsync("/internal/heartbeat");
+            return response.IsSuccessStatusCode;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }

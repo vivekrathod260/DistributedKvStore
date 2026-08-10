@@ -101,10 +101,13 @@ public class HeartbeatService : BackgroundService
                 nodeState.UpdateNodeStatus(node.NodeId, NodeStatus.Suspect);
                 nodeState.TouchLastUpdated();
 
-                await gossipService.BroadcastNodeStatusChangeAsync(new List<NodeStatusChange>
-                {
-                    new() { NodeId = node.NodeId, NewStatus = NodeStatus.Suspect }
-                });
+                var verifiers = clusterState.Nodes
+                    .Where(n => n.Status == NodeStatus.Online && n.NodeId != currentNode.NodeId && n.NodeId != node.NodeId)
+                    .OrderBy(_ => Random.Shared.Next())
+                    .Take(5)
+                    .ToList();
+
+                await gossipService.BroadcastNodeSuspicionAsync(node.NodeId, verifiers.Select(v => v.NodeId).ToList());
             }
 
             // // Escalate to failed once the node has been unreachable for too long

@@ -2,5 +2,6 @@
 
 public enum GossipTopic
 {
-    NodeStatusChange = 0
+    NodeStatusChange = 0,
+    NodeSuspicion = 1
 }
