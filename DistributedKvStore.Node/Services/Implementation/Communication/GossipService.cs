@@ -71,6 +71,9 @@ public class GossipService : IGossipService
         _processedMessages[message.MessageId] = DateTime.UtcNow;
         CleanupOldMessages();
 
+        // Receiving any gossip message is itself proof the sender is alive right now.
+        _nodeState.TouchLastSeen(message.SenderNodeId);
+
         if(message.Topic == GossipTopic.NodeStatusChange && message.Payload.NodeStatusChanges != null)
         {
             // Apply state changes
@@ -150,9 +153,14 @@ public class GossipService : IGossipService
         {
             _nodeState.UpdateNodeStatus(change.NodeId, change.NewStatus);
 
-            if (change.NewStatus == NodeStatus.Failed)
+            if (change.NewStatus == NodeStatus.Online)
+            {
+                _nodeState.TouchLastSeen(change.NodeId);
+            }
+            else if (change.NewStatus == NodeStatus.Failed)
             {
                 _logger.LogWarning("Node {NodeId} marked as failed via gossip", change.NodeId);
+                _nodeState.RemoveNode(change.NodeId);
             }
         }
         else if (change.NewStatus == NodeStatus.Online || change.NewStatus == NodeStatus.Joining)
@@ -247,6 +255,8 @@ public class GossipService : IGossipService
         {
             _logger.LogInformation("Verification ping to suspected node {NodeId} succeeded; broadcasting online status", targetNode.NodeId);
 
+            _nodeState.TouchLastSeen(targetNode.NodeId);
+
             await BroadcastNodeStatusChangeAsync(new List<NodeStatusChange>
             {
                 new()
@@ -257,12 +267,6 @@ public class GossipService : IGossipService
                     HashPosition = targetNode.HashPosition
                 }
             });
-        }
-        else
-        {
-            // No reply from the suspected node - do nothing for now.
-            _logger.LogDebug("Verification ping to suspected node {NodeId} got no reply", targetNode.NodeId);
-            return;
         }
     }
 

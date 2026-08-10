@@ -14,10 +14,7 @@ public class HeartbeatService : BackgroundService
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<HeartbeatService> _logger;
     private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan FailedThreshold = TimeSpan.FromSeconds(30);
     private const int ProxyCount = 3;
-
-    private readonly Dictionary<Guid, DateTime> _lastHeartbeat = new();
 
     public HeartbeatService(IServiceProvider serviceProvider, ILogger<HeartbeatService> logger)
     {
@@ -72,29 +69,12 @@ public class HeartbeatService : BackgroundService
 
             if (reachable) // Online
             {
-                _lastHeartbeat[node.NodeId] = DateTime.UtcNow;
-
-                // If node was suspect, mark it back online
-                if (node.Status == NodeStatus.Suspect)
-                {
-                    nodeState.UpdateNodeStatus(node.NodeId, NodeStatus.Online);
-                    nodeState.TouchLastUpdated();
-                    await gossipService.BroadcastNodeStatusChangeAsync(new List<NodeStatusChange>
-                    {
-                        new()
-                        {
-                            NodeId = node.NodeId,
-                            NewStatus = NodeStatus.Online,
-                            BaseUrl = node.BaseUrl,
-                            HashPosition = node.HashPosition
-                        }
-                    });
-                }
-
+                nodeState.TouchLastSeen(node.NodeId);
                 continue;
             }
+
             // Both direct and indirect probes failed - mark suspect right away
-            else if (node.Status != NodeStatus.Suspect && node.Status != NodeStatus.Failed)
+            if (node.Status != NodeStatus.Suspect && node.Status != NodeStatus.Failed)
             {
                 _logger.LogWarning("Node {NodeId} marked as SUSPECT (direct and indirect heartbeat failed)", node.NodeId);
 
@@ -109,29 +89,6 @@ public class HeartbeatService : BackgroundService
 
                 await gossipService.BroadcastNodeSuspicionAsync(node.NodeId, verifiers.Select(v => v.NodeId).ToList());
             }
-
-            // // Escalate to failed once the node has been unreachable for too long
-            // if (!_lastHeartbeat.TryGetValue(node.NodeId, out var lastSeen))
-            // {
-            //     _lastHeartbeat[node.NodeId] = DateTime.UtcNow;
-            //     lastSeen = DateTime.UtcNow;
-            // }
-
-            // var timeSinceLastHeartbeat = DateTime.UtcNow - lastSeen;
-
-            // if (timeSinceLastHeartbeat > FailedThreshold && node.Status != NodeStatus.Failed)
-            // {
-            //     _logger.LogWarning("Node {NodeId} marked as FAILED (no confirmed heartbeat for {Seconds}s)",
-            //         node.NodeId, timeSinceLastHeartbeat.TotalSeconds);
-
-            //     nodeState.UpdateNodeStatus(node.NodeId, NodeStatus.Failed);
-            //     nodeState.TouchLastUpdated();
-
-            //     await gossipService.BroadcastNodeStatusChangeAsync(new List<NodeStatusChange>
-            //     {
-            //         new() { NodeId = node.NodeId, NewStatus = NodeStatus.Failed }
-            //     });
-            // }
         }
     }
 

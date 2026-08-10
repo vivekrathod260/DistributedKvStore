@@ -132,6 +132,9 @@ public class InternalController : ControllerBase
             client.Timeout = TimeSpan.FromSeconds(3);
 
             var response = await client.GetAsync("/internal/heartbeat");
+
+            if(response.IsSuccessStatusCode) _nodeState.TouchLastSeen(targetNode.NodeId);
+
             return Ok(new ProxyHeartbeatResponse { Reachable = response.IsSuccessStatusCode });
         }
         catch (Exception ex)

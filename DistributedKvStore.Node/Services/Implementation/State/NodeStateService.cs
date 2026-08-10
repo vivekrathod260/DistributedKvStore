@@ -13,6 +13,8 @@ public interface INodeStateService
     void AddNode(ClusterNodeInfo node);
     void RemoveNode(Guid nodeId);
     DateTime TouchLastUpdated();
+    void TouchLastSeen(Guid nodeId);
+    DateTime? GetLastSeenUtc(Guid nodeId);
     int GetReplicationFactor();
     void SetReplicationFactor(int factor);
     IHashRing GetHashRing();
@@ -26,7 +28,9 @@ public class NodeStateService : INodeStateService
     private ClusterState _clusterState;
     private readonly ClusterNodeInfo _currentNode;
     private readonly ConsistentHashRing _hashRing;
+    private readonly Dictionary<Guid, DateTime> _lastSeenUtc = new();
     private bool _isInitialized;
+    private static readonly TimeSpan FailedThreshold = TimeSpan.FromSeconds(30);
 
     public bool IsInitialized
     {
@@ -57,6 +61,7 @@ public class NodeStateService : INodeStateService
 
         _hashRing = new ConsistentHashRing();
         _hashRing.BuildRing(_clusterState.Nodes);
+        _lastSeenUtc[nodeId] = DateTime.UtcNow;
     }
 
     public void MarkInitialized()
@@ -68,9 +73,11 @@ public class NodeStateService : INodeStateService
 
     public ClusterState GetClusterState()
     {
-        _lock.EnterReadLock();
+        _lock.EnterWriteLock();
         try
         {
+            PruneExpiredSuspects();
+
             return new ClusterState
             {
                 ClusterLastUpdatedAt = _clusterState.ClusterLastUpdatedAt,
@@ -84,7 +91,30 @@ public class NodeStateService : INodeStateService
                 }).ToList()
             };
         }
-        finally { _lock.ExitReadLock(); }
+        finally { _lock.ExitWriteLock(); }
+    }
+
+    // Lazily evicts Suspect nodes nobody has confirmed alive for too long.
+    private void PruneExpiredSuspects()
+    {
+        var now = DateTime.UtcNow;
+        var expired = _clusterState.Nodes
+            .Where(n => n.Status == NodeStatus.Suspect && (!_lastSeenUtc.TryGetValue(n.NodeId, out var lastSeen) || now - lastSeen > FailedThreshold))
+            .Select(n => n.NodeId)
+            .ToList();
+
+        if (expired.Count == 0)
+            return;
+
+        foreach (var nodeId in expired)
+        {
+            _clusterState.Nodes.RemoveAll(n => n.NodeId == nodeId);
+            _lastSeenUtc.Remove(nodeId);
+        }
+
+        _hashRing.BuildRing(_clusterState.Nodes);
+
+        _clusterState.ClusterLastUpdatedAt = now > _clusterState.ClusterLastUpdatedAt ? now : _clusterState.ClusterLastUpdatedAt.AddTicks(1);
     }
 
     public ClusterNodeInfo GetCurrentNode()
@@ -112,6 +142,7 @@ public class NodeStateService : INodeStateService
             {
                 _clusterState = state;
                 _hashRing.BuildRing(_clusterState.Nodes);
+                SyncLastSeenTracking();
             }
         }
         finally { _lock.ExitWriteLock(); }
@@ -141,6 +172,7 @@ public class NodeStateService : INodeStateService
             {
                 _clusterState.Nodes.Add(node);
                 _hashRing.BuildRing(_clusterState.Nodes);
+                SyncLastSeenTracking();
             }
         }
         finally { _lock.ExitWriteLock(); }
@@ -153,8 +185,32 @@ public class NodeStateService : INodeStateService
         {
             _clusterState.Nodes.RemoveAll(n => n.NodeId == nodeId);
             _hashRing.BuildRing(_clusterState.Nodes);
+            _lastSeenUtc.Remove(nodeId);
         }
         finally { _lock.ExitWriteLock(); }
+    }
+
+    // Keeps the local last-seen tracking dictionary in sync with whatever node IDs are
+    // currently known, whether they arrived via a granular AddNode or a wholesale
+    // UpdateClusterState snapshot replace. Must be called while holding the write lock.
+    private void SyncLastSeenTracking()
+    {
+        var now = DateTime.UtcNow;
+        var knownIds = new HashSet<Guid>(_clusterState.Nodes.Select(n => n.NodeId));
+
+        foreach (var nodeId in knownIds)
+        {
+            if (!_lastSeenUtc.ContainsKey(nodeId))
+            {
+                _lastSeenUtc[nodeId] = now;
+            }
+        }
+
+        var staleIds = _lastSeenUtc.Keys.Where(id => !knownIds.Contains(id)).ToList();
+        foreach (var staleId in staleIds)
+        {
+            _lastSeenUtc.Remove(staleId);
+        }
     }
 
     public DateTime TouchLastUpdated()
@@ -169,6 +225,20 @@ public class NodeStateService : INodeStateService
             return _clusterState.ClusterLastUpdatedAt;
         }
         finally { _lock.ExitWriteLock(); }
+    }
+
+    public void TouchLastSeen(Guid nodeId)
+    {
+        _lock.EnterWriteLock();
+        try { _lastSeenUtc[nodeId] = DateTime.UtcNow; }
+        finally { _lock.ExitWriteLock(); }
+    }
+
+    public DateTime? GetLastSeenUtc(Guid nodeId)
+    {
+        _lock.EnterReadLock();
+        try { return _lastSeenUtc.TryGetValue(nodeId, out var lastSeen) ? lastSeen : null; }
+        finally { _lock.ExitReadLock(); }
     }
 
     public int GetReplicationFactor()
