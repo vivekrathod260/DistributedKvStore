@@ -108,7 +108,7 @@ public class InternalController : ControllerBase
         return Ok(new HeartbeatResponse
         {
             NodeId = currentNode.NodeId,
-            ClusterVersion = clusterState.Version,
+            ClusterLastUpdatedAt = clusterState.ClusterLastUpdatedAt,
             TimestampUtc = DateTime.UtcNow
         });
     }

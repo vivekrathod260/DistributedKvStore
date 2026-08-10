@@ -5,7 +5,7 @@ namespace DistributedKvStore.Shared.DTOs;
 public class GossipMessage
 {
     public Guid MessageId { get; set; }
-    public long ClusterVersion { get; set; }
+    public DateTime ClusterLastUpdatedAt { get; set; }
     public Guid SenderNodeId { get; set; }
     public GossipTopic Topic { get; set; }
     public GossipPayload Payload { get; set; } = new(); 

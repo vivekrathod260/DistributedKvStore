@@ -62,11 +62,11 @@ public class ClusterTopologyRefreshService : BackgroundService
 
                 var response = await client.GetFromJsonAsync<ClusterState>("/api/cluster/state", cancellationToken);
 
-                if (response != null && response.Version > clusterState.Version)
+                if (response != null && response.ClusterLastUpdatedAt > clusterState.ClusterLastUpdatedAt)
                 {
                     nodeState.UpdateClusterState(response);
-                    _logger.LogInformation("Topology refreshed from {NodeId}. New version: {Version}",
-                        peer.NodeId, response.Version);
+                    _logger.LogInformation("Topology refreshed from {NodeId}. New timestamp: {ClusterLastUpdatedAt}",
+                        peer.NodeId, response.ClusterLastUpdatedAt);
                     return;
                 }
             }

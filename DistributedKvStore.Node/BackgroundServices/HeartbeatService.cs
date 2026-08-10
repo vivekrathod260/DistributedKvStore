@@ -58,11 +58,17 @@ public class HeartbeatService : BackgroundService
 
         var peers = clusterState.Nodes
             .Where(n => n.NodeId != currentNode.NodeId && n.Status != NodeStatus.Leaving)
+            .Take(2)
             .ToList(); // Joining, Online, Suspect only
 
         foreach (var node in peers)
         {
             var reachable = await PingDirectlyAsync(node, httpClientFactory, cancellationToken);
+
+            if(!reachable) // Proxy heartbeat check
+            {
+                reachable = await IsReachableViaProxiesAsync(node, currentNode, clusterState, httpClientFactory, cancellationToken);
+            }
 
             if (reachable) // Online
             {
@@ -72,7 +78,7 @@ public class HeartbeatService : BackgroundService
                 if (node.Status == NodeStatus.Suspect)
                 {
                     nodeState.UpdateNodeStatus(node.NodeId, NodeStatus.Online);
-                    nodeState.IncrementVersion();
+                    nodeState.TouchLastUpdated();
                     await gossipService.BroadcastNodeStatusChangeAsync(new List<NodeStatusChange>
                     {
                         new()
@@ -87,18 +93,13 @@ public class HeartbeatService : BackgroundService
 
                 continue;
             }
-            else // Proxy heartbeat check
-            {
-                reachable = await IsReachableViaProxiesAsync(node, currentNode, clusterState, httpClientFactory, cancellationToken);
-            }
-
             // Both direct and indirect probes failed - mark suspect right away
-            if (node.Status != NodeStatus.Suspect && node.Status != NodeStatus.Failed)
+            else if (node.Status != NodeStatus.Suspect && node.Status != NodeStatus.Failed)
             {
                 _logger.LogWarning("Node {NodeId} marked as SUSPECT (direct and indirect heartbeat failed)", node.NodeId);
 
                 nodeState.UpdateNodeStatus(node.NodeId, NodeStatus.Suspect);
-                nodeState.IncrementVersion();
+                nodeState.TouchLastUpdated();
 
                 await gossipService.BroadcastNodeStatusChangeAsync(new List<NodeStatusChange>
                 {
@@ -106,28 +107,28 @@ public class HeartbeatService : BackgroundService
                 });
             }
 
-            // Escalate to failed once the node has been unreachable for too long
-            if (!_lastHeartbeat.TryGetValue(node.NodeId, out var lastSeen))
-            {
-                _lastHeartbeat[node.NodeId] = DateTime.UtcNow;
-                lastSeen = DateTime.UtcNow;
-            }
+            // // Escalate to failed once the node has been unreachable for too long
+            // if (!_lastHeartbeat.TryGetValue(node.NodeId, out var lastSeen))
+            // {
+            //     _lastHeartbeat[node.NodeId] = DateTime.UtcNow;
+            //     lastSeen = DateTime.UtcNow;
+            // }
 
-            var timeSinceLastHeartbeat = DateTime.UtcNow - lastSeen;
+            // var timeSinceLastHeartbeat = DateTime.UtcNow - lastSeen;
 
-            if (timeSinceLastHeartbeat > FailedThreshold && node.Status != NodeStatus.Failed)
-            {
-                _logger.LogWarning("Node {NodeId} marked as FAILED (no confirmed heartbeat for {Seconds}s)",
-                    node.NodeId, timeSinceLastHeartbeat.TotalSeconds);
+            // if (timeSinceLastHeartbeat > FailedThreshold && node.Status != NodeStatus.Failed)
+            // {
+            //     _logger.LogWarning("Node {NodeId} marked as FAILED (no confirmed heartbeat for {Seconds}s)",
+            //         node.NodeId, timeSinceLastHeartbeat.TotalSeconds);
 
-                nodeState.UpdateNodeStatus(node.NodeId, NodeStatus.Failed);
-                nodeState.IncrementVersion();
+            //     nodeState.UpdateNodeStatus(node.NodeId, NodeStatus.Failed);
+            //     nodeState.TouchLastUpdated();
 
-                await gossipService.BroadcastNodeStatusChangeAsync(new List<NodeStatusChange>
-                {
-                    new() { NodeId = node.NodeId, NewStatus = NodeStatus.Failed }
-                });
-            }
+            //     await gossipService.BroadcastNodeStatusChangeAsync(new List<NodeStatusChange>
+            //     {
+            //         new() { NodeId = node.NodeId, NewStatus = NodeStatus.Failed }
+            //     });
+            // }
         }
     }
 

@@ -46,7 +46,7 @@ public class DistributedClient : IDistributedClient
                         _clusterState = response;
                         _hashRing.BuildRing(response.Nodes);
                     }
-                    _logger?.LogInformation("Connected to cluster via {Seed}. Version: {Version}", seed, response.Version);
+                    _logger?.LogInformation("Connected to cluster via {Seed}. LastUpdatedAt: {ClusterLastUpdatedAt}", seed, response.ClusterLastUpdatedAt);
                     return;
                 }
             }
@@ -215,11 +215,11 @@ public class DistributedClient : IDistributedClient
                 {
                     lock (_stateLock)
                     {
-                        if (response.Version > (_clusterState?.Version ?? 0))
+                        if (response.ClusterLastUpdatedAt > (_clusterState?.ClusterLastUpdatedAt ?? DateTime.MinValue))
                         {
                             _clusterState = response;
                             _hashRing.BuildRing(response.Nodes);
-                            _logger?.LogInformation("Topology refreshed to version {Version}", response.Version);
+                            _logger?.LogInformation("Topology refreshed to timestamp {ClusterLastUpdatedAt}", response.ClusterLastUpdatedAt);
                         }
                     }
                     return;
@@ -241,7 +241,7 @@ public class DistributedClient : IDistributedClient
                 {
                     lock (_stateLock)
                     {
-                        if (response.Version > (_clusterState?.Version ?? 0))
+                        if (response.ClusterLastUpdatedAt > (_clusterState?.ClusterLastUpdatedAt ?? DateTime.MinValue))
                         {
                             _clusterState = response;
                             _hashRing.BuildRing(response.Nodes);

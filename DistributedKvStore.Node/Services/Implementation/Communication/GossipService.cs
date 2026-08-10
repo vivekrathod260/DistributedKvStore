@@ -75,7 +75,7 @@ public class GossipService : IGossipService
             // Apply state changes
             foreach (var change in message.Payload.NodeStatusChanges!)
             {
-                ApplyNodeStatusChange(change, message.ClusterVersion);
+                ApplyNodeStatusChange(change, message.ClusterLastUpdatedAt);
             }
         }
 
@@ -115,12 +115,12 @@ public class GossipService : IGossipService
     public async Task BroadcastNodeStatusChangeAsync(List<NodeStatusChange> changes)
     {
         var currentNode = _nodeState.GetCurrentNode();
-        var version = _nodeState.IncrementVersion();
+        var lastUpdatedAt = _nodeState.TouchLastUpdated();
 
         var message = new GossipMessage
         {
             MessageId = Guid.NewGuid(),
-            ClusterVersion = version,
+            ClusterLastUpdatedAt = lastUpdatedAt,
             SenderNodeId = currentNode.NodeId,
             Topic = GossipTopic.NodeStatusChange,
             Payload = new GossipPayload
@@ -133,11 +133,11 @@ public class GossipService : IGossipService
         await BroadcastGossipAsync(message);
     }
 
-    private void ApplyNodeStatusChange(NodeStatusChange change, long clusterVersion)
+    private void ApplyNodeStatusChange(NodeStatusChange change, DateTime clusterLastUpdatedAt)
     {
         var clusterState = _nodeState.GetClusterState();
 
-        if (clusterVersion <= clusterState.Version)
+        if (clusterLastUpdatedAt <= clusterState.ClusterLastUpdatedAt)
             return;
 
         var existingNode = clusterState.Nodes.FirstOrDefault(n => n.NodeId == change.NodeId);
@@ -163,7 +163,7 @@ public class GossipService : IGossipService
 
         _nodeState.UpdateClusterState(new Shared.Models.ClusterState
         {
-            Version = clusterVersion,
+            ClusterLastUpdatedAt = clusterLastUpdatedAt,
             ReplicationFactor = clusterState.ReplicationFactor,
             Nodes = _nodeState.GetClusterState().Nodes
         });

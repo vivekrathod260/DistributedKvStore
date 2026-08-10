@@ -12,7 +12,7 @@ public interface INodeStateService
     void UpdateNodeStatus(Guid nodeId, NodeStatus status);
     void AddNode(ClusterNodeInfo node);
     void RemoveNode(Guid nodeId);
-    long IncrementVersion();
+    DateTime TouchLastUpdated();
     int GetReplicationFactor();
     void SetReplicationFactor(int factor);
     IHashRing GetHashRing();
@@ -50,7 +50,7 @@ public class NodeStateService : INodeStateService
 
         _clusterState = new ClusterState
         {
-            Version = 1,
+            ClusterLastUpdatedAt = DateTime.UtcNow,
             ReplicationFactor = 3,
             Nodes = new List<ClusterNodeInfo> { _currentNode }
         };
@@ -73,7 +73,7 @@ public class NodeStateService : INodeStateService
         {
             return new ClusterState
             {
-                Version = _clusterState.Version,
+                ClusterLastUpdatedAt = _clusterState.ClusterLastUpdatedAt,
                 ReplicationFactor = _clusterState.ReplicationFactor,
                 Nodes = _clusterState.Nodes.Select(n => new ClusterNodeInfo
                 {
@@ -108,7 +108,7 @@ public class NodeStateService : INodeStateService
         _lock.EnterWriteLock();
         try
         {
-            if (state.Version > _clusterState.Version)
+            if (state.ClusterLastUpdatedAt > _clusterState.ClusterLastUpdatedAt)
             {
                 _clusterState = state;
                 _hashRing.BuildRing(_clusterState.Nodes);
@@ -157,13 +157,16 @@ public class NodeStateService : INodeStateService
         finally { _lock.ExitWriteLock(); }
     }
 
-    public long IncrementVersion()
+    public DateTime TouchLastUpdated()
     {
         _lock.EnterWriteLock();
         try
         {
-            _clusterState.Version++;
-            return _clusterState.Version;
+            var now = DateTime.UtcNow;
+            _clusterState.ClusterLastUpdatedAt = now > _clusterState.ClusterLastUpdatedAt
+                ? now
+                : _clusterState.ClusterLastUpdatedAt.AddTicks(1);
+            return _clusterState.ClusterLastUpdatedAt;
         }
         finally { _lock.ExitWriteLock(); }
     }
