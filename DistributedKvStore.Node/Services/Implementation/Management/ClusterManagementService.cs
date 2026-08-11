@@ -38,14 +38,14 @@ public class ClusterManagementService : IClusterManagementService
         return Task.FromResult(_nodeState.GetClusterState());
     }
 
-    public async Task<ClusterState> AddNodeAsync(string baseUrl)
+    public async Task<ClusterState> AddNodeAsync(string baseUrl, Guid? nodeId = null)
     {
         var hashRing = new ConsistentHashRing();
         var hashPosition = hashRing.ComputeHash(baseUrl);
 
         var newNode = new ClusterNodeInfo
         {
-            NodeId = Guid.NewGuid(),
+            NodeId = nodeId ?? Guid.NewGuid(),
             BaseUrl = baseUrl,
             HashPosition = hashPosition,
             Status = NodeStatus.Joining
@@ -56,7 +56,8 @@ public class ClusterManagementService : IClusterManagementService
 
         _logger.LogInformation("Adding node {NodeId} at position {Position}", newNode.NodeId, hashPosition);
 
-        // Notify the new node about the cluster state
+        // Push the current cluster state (including the new node itself) to the new node,
+        // so it doesn't start out only aware of itself.
         try
         {
             var client = _httpClientFactory.CreateClient("InternalNode");
@@ -64,19 +65,12 @@ public class ClusterManagementService : IClusterManagementService
             client.Timeout = TimeSpan.FromSeconds(10);
 
             var state = _nodeState.GetClusterState();
-            await client.PostAsJsonAsync("/internal/sync", new SyncRequest
-            {
-                NodeId = newNode.NodeId,
-                LastOperationId = 0
-            });
+            await client.PostAsJsonAsync("/internal/cluster-state", state);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Could not notify new node {BaseUrl} about cluster state", baseUrl);
+            _logger.LogWarning(ex, "Could not push cluster state to new node {BaseUrl}", baseUrl);
         }
-
-        // Trigger migration to new node
-        await _migrationService.MigrateToNewNodeAsync(newNode);
 
         // Mark node online
         _nodeState.UpdateNodeStatus(newNode.NodeId, NodeStatus.Online);

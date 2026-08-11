@@ -71,6 +71,13 @@ public class InternalController : ControllerBase
         return Ok(response);
     }
 
+    [HttpPost("cluster-state")]
+    public IActionResult SetClusterState([FromBody] ClusterState state)
+    {
+        _nodeState.UpdateClusterState(state);
+        return Ok();
+    }
+
     [HttpPost("sync")]
     public async Task<IActionResult> Sync([FromBody] SyncRequest request)
     {

@@ -35,7 +35,7 @@ public class ClusterController : ControllerBase
     [HttpPost("add-node")]
     public async Task<IActionResult> AddNode([FromBody] AddNodeRequest request)
     {
-        var state = await _clusterService.AddNodeAsync(request.BaseUrl);
+        var state = await _clusterService.AddNodeAsync(request.BaseUrl, request.NodeId);
         return Ok(state);
     }
 

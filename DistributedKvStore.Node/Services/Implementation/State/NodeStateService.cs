@@ -140,6 +140,25 @@ public class NodeStateService : INodeStateService
         {
             if (state.ClusterLastUpdatedAt > _clusterState.ClusterLastUpdatedAt)
             {
+                var currNodeInfo = state.Nodes.FirstOrDefault(n => n.BaseUrl == _currentNode.BaseUrl);
+                if (currNodeInfo != null)
+                {
+                    _currentNode.NodeId = currNodeInfo.NodeId;
+                    _currentNode.HashPosition = currNodeInfo.HashPosition;
+                    _currentNode.Status = currNodeInfo.Status;
+                }
+                else
+                {
+                    state.Nodes.RemoveAll(n => n.BaseUrl == _currentNode.BaseUrl);
+                    state.Nodes.Add(new ClusterNodeInfo
+                    {
+                        NodeId = _currentNode.NodeId,
+                        BaseUrl = _currentNode.BaseUrl,
+                        HashPosition = _currentNode.HashPosition,
+                        Status = _currentNode.Status
+                    });
+                }
+
                 _clusterState = state;
                 _hashRing.BuildRing(_clusterState.Nodes);
                 SyncLastSeenTracking();
