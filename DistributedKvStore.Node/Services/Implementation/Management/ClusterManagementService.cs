@@ -52,7 +52,6 @@ public class ClusterManagementService : IClusterManagementService
         };
 
         _nodeState.AddNode(newNode);
-        _nodeState.TouchLastUpdated();
 
         _logger.LogInformation("Adding node {NodeId} at position {Position}", newNode.NodeId, hashPosition);
 
@@ -80,7 +79,6 @@ public class ClusterManagementService : IClusterManagementService
     public async Task<ClusterState> RemoveNodeAsync(Guid nodeId)
     {
         _nodeState.UpdateNodeStatus(nodeId, NodeStatus.Leaving);
-        _nodeState.TouchLastUpdated();
 
         _logger.LogInformation("Removing node {NodeId}", nodeId);
 
@@ -89,7 +87,6 @@ public class ClusterManagementService : IClusterManagementService
 
         // Remove from cluster
         _nodeState.RemoveNode(nodeId);
-        _nodeState.TouchLastUpdated();
 
         // Gossip removal
         await _gossipService.BroadcastNodeStatusChangeAsync(new List<NodeStatusChange>
@@ -116,7 +113,6 @@ public class ClusterManagementService : IClusterManagementService
         }
 
         _nodeState.UpdateNodeStatus(nodeId, NodeStatus.Online);
-        _nodeState.TouchLastUpdated();
 
         await _gossipService.BroadcastNodeStatusChangeAsync(new List<NodeStatusChange>
         {
@@ -135,7 +131,6 @@ public class ClusterManagementService : IClusterManagementService
     public Task SetReplicationFactorAsync(int factor)
     {
         _nodeState.SetReplicationFactor(factor);
-        _nodeState.TouchLastUpdated();
         _logger.LogInformation("Replication factor set to {Factor}", factor);
         return Task.CompletedTask;
     }

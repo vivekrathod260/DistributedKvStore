@@ -110,12 +110,10 @@ public class InternalController : ControllerBase
     public IActionResult Heartbeat()
     {
         var currentNode = _nodeState.GetCurrentNode();
-        var clusterState = _nodeState.GetClusterState();
 
         return Ok(new HeartbeatResponse
         {
             NodeId = currentNode.NodeId,
-            ClusterLastUpdatedAt = clusterState.ClusterLastUpdatedAt,
             TimestampUtc = DateTime.UtcNow
         });
     }

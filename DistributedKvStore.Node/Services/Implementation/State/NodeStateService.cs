@@ -12,7 +12,6 @@ public interface INodeStateService
     void UpdateNodeStatus(Guid nodeId, NodeStatus status);
     void AddNode(ClusterNodeInfo node);
     void RemoveNode(Guid nodeId);
-    DateTime TouchLastUpdated();
     void TouchLastSeen(Guid nodeId);
     DateTime? GetLastSeenUtc(Guid nodeId);
     int GetReplicationFactor();
@@ -54,7 +53,6 @@ public class NodeStateService : INodeStateService
 
         _clusterState = new ClusterState
         {
-            ClusterLastUpdatedAt = DateTime.UtcNow,
             ReplicationFactor = 3,
             Nodes = new List<ClusterNodeInfo> { _currentNode }
         };
@@ -80,7 +78,6 @@ public class NodeStateService : INodeStateService
 
             return new ClusterState
             {
-                ClusterLastUpdatedAt = _clusterState.ClusterLastUpdatedAt,
                 ReplicationFactor = _clusterState.ReplicationFactor,
                 Nodes = _clusterState.Nodes.Select(n => new ClusterNodeInfo
                 {
@@ -113,8 +110,6 @@ public class NodeStateService : INodeStateService
         }
 
         _hashRing.BuildRing(_clusterState.Nodes);
-
-        _clusterState.ClusterLastUpdatedAt = now > _clusterState.ClusterLastUpdatedAt ? now : _clusterState.ClusterLastUpdatedAt.AddTicks(1);
     }
 
     public ClusterNodeInfo GetCurrentNode()
@@ -133,36 +128,33 @@ public class NodeStateService : INodeStateService
         finally { _lock.ExitReadLock(); }
     }
 
+    // Merges an incoming snapshot into the local view per-member
     public void UpdateClusterState(ClusterState state)
     {
         _lock.EnterWriteLock();
         try
         {
-            if (state.ClusterLastUpdatedAt > _clusterState.ClusterLastUpdatedAt)
+            var currNodeInfo = state.Nodes.FirstOrDefault(n => n.BaseUrl == _currentNode.BaseUrl);
+            if (currNodeInfo != null)
             {
-                var currNodeInfo = state.Nodes.FirstOrDefault(n => n.BaseUrl == _currentNode.BaseUrl);
-                if (currNodeInfo != null)
-                {
-                    _currentNode.NodeId = currNodeInfo.NodeId;
-                    _currentNode.HashPosition = currNodeInfo.HashPosition;
-                    _currentNode.Status = currNodeInfo.Status;
-                }
-                else
-                {
-                    state.Nodes.RemoveAll(n => n.BaseUrl == _currentNode.BaseUrl);
-                    state.Nodes.Add(new ClusterNodeInfo
-                    {
-                        NodeId = _currentNode.NodeId,
-                        BaseUrl = _currentNode.BaseUrl,
-                        HashPosition = _currentNode.HashPosition,
-                        Status = _currentNode.Status
-                    });
-                }
-
-                _clusterState = state;
-                _hashRing.BuildRing(_clusterState.Nodes);
-                SyncLastSeenTracking();
+                _currentNode.NodeId = currNodeInfo.NodeId;
+                _currentNode.HashPosition = currNodeInfo.HashPosition;
+                _currentNode.Status = currNodeInfo.Status;
             }
+            else
+            {
+                state.Nodes.Add(new ClusterNodeInfo
+                {
+                    NodeId = _currentNode.NodeId,
+                    BaseUrl = _currentNode.BaseUrl,
+                    HashPosition = _currentNode.HashPosition,
+                    Status = _currentNode.Status
+                });
+            }
+
+            _clusterState = state;
+            _hashRing.BuildRing(_clusterState.Nodes);
+            SyncLastSeenTracking();
         }
         finally { _lock.ExitWriteLock(); }
     }
@@ -230,20 +222,6 @@ public class NodeStateService : INodeStateService
         {
             _lastSeenUtc.Remove(staleId);
         }
-    }
-
-    public DateTime TouchLastUpdated()
-    {
-        _lock.EnterWriteLock();
-        try
-        {
-            var now = DateTime.UtcNow;
-            _clusterState.ClusterLastUpdatedAt = now > _clusterState.ClusterLastUpdatedAt
-                ? now
-                : _clusterState.ClusterLastUpdatedAt.AddTicks(1);
-            return _clusterState.ClusterLastUpdatedAt;
-        }
-        finally { _lock.ExitWriteLock(); }
     }
 
     public void TouchLastSeen(Guid nodeId)

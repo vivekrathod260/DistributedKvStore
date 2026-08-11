@@ -46,7 +46,7 @@ public class DistributedClient : IDistributedClient
                         _clusterState = response;
                         _hashRing.BuildRing(response.Nodes);
                     }
-                    _logger?.LogInformation("Connected to cluster via {Seed}. LastUpdatedAt: {ClusterLastUpdatedAt}", seed, response.ClusterLastUpdatedAt);
+                    _logger?.LogInformation("Connected to cluster via {Seed}. {NodeCount} nodes known", seed, response.Nodes.Count);
                     return;
                 }
             }
@@ -213,15 +213,7 @@ public class DistributedClient : IDistributedClient
                 var response = await _httpClient.GetFromJsonAsync<ClusterState>($"{node.BaseUrl}/api/cluster/state");
                 if (response != null)
                 {
-                    lock (_stateLock)
-                    {
-                        if (response.ClusterLastUpdatedAt > (_clusterState?.ClusterLastUpdatedAt ?? DateTime.MinValue))
-                        {
-                            _clusterState = response;
-                            _hashRing.BuildRing(response.Nodes);
-                            _logger?.LogInformation("Topology refreshed to timestamp {ClusterLastUpdatedAt}", response.ClusterLastUpdatedAt);
-                        }
-                    }
+                    MergeClusterState(response);
                     return;
                 }
             }
@@ -239,14 +231,7 @@ public class DistributedClient : IDistributedClient
                 var response = await _httpClient.GetFromJsonAsync<ClusterState>($"{seed}/api/cluster/state");
                 if (response != null)
                 {
-                    lock (_stateLock)
-                    {
-                        if (response.ClusterLastUpdatedAt > (_clusterState?.ClusterLastUpdatedAt ?? DateTime.MinValue))
-                        {
-                            _clusterState = response;
-                            _hashRing.BuildRing(response.Nodes);
-                        }
-                    }
+                    MergeClusterState(response);
                     return;
                 }
             }
@@ -254,6 +239,18 @@ public class DistributedClient : IDistributedClient
             {
                 // Try next seed
             }
+        }
+    }
+
+    // Snapshots aren't required to arrive in order, so whichever one was fetched most
+    // recently simply replaces the client's view outright - no comparison needed.
+    private void MergeClusterState(ClusterState incoming)
+    {
+        lock (_stateLock)
+        {
+            _clusterState = incoming;
+            _hashRing.BuildRing(incoming.Nodes);
+            _logger?.LogInformation("Topology refreshed, {NodeCount} nodes known", incoming.Nodes.Count);
         }
     }
 

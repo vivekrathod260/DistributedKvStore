@@ -79,7 +79,6 @@ public class HeartbeatService : BackgroundService
                 _logger.LogWarning("Node {NodeId} marked as SUSPECT (direct and indirect heartbeat failed)", node.NodeId);
 
                 nodeState.UpdateNodeStatus(node.NodeId, NodeStatus.Suspect);
-                nodeState.TouchLastUpdated();
 
                 var verifiers = clusterState.Nodes
                     .Where(n => n.Status == NodeStatus.Online && n.NodeId != currentNode.NodeId && n.NodeId != node.NodeId)

@@ -80,16 +80,16 @@ public class GossipService : IGossipService
             // Apply state changes
             foreach (var change in message.Payload.NodeStatusChanges!)
             {
-                ApplyNodeStatusChange(change, message.ClusterLastUpdatedAt);
+                ApplyNodeStatusChange(change);
             }
         }
         else if (message.Topic == GossipTopic.NodeSuspicion && message.Payload.NodeSuspicion != null)
         {
-            ApplyNodeSuspicion(message.Payload.NodeSuspicion, message.ClusterLastUpdatedAt);
+            ApplyNodeSuspicion(message.Payload.NodeSuspicion);
         }
         else if (message.Topic == GossipTopic.NodeJoin && message.Payload.NodeJoin != null)
         {
-            ApplyNodeJoin(message.Payload.NodeJoin, message.ClusterLastUpdatedAt);
+            ApplyNodeJoin(message.Payload.NodeJoin);
         }
 
         // Forward to other nodes
@@ -128,12 +128,10 @@ public class GossipService : IGossipService
     public async Task BroadcastNodeStatusChangeAsync(List<NodeStatusChange> changes)
     {
         var currentNode = _nodeState.GetCurrentNode();
-        var lastUpdatedAt = _nodeState.TouchLastUpdated();
 
         var message = new GossipMessage
         {
             MessageId = Guid.NewGuid(),
-            ClusterLastUpdatedAt = lastUpdatedAt,
             SenderNodeId = currentNode.NodeId,
             Topic = GossipTopic.NodeStatusChange,
             Payload = new GossipPayload
@@ -146,26 +144,25 @@ public class GossipService : IGossipService
         await BroadcastGossipAsync(message);
     }
 
-    private void ApplyNodeStatusChange(NodeStatusChange change, DateTime clusterLastUpdatedAt)
+    private void ApplyNodeStatusChange(NodeStatusChange change)
     {
         var clusterState = _nodeState.GetClusterState();
-
-        if (clusterLastUpdatedAt <= clusterState.ClusterLastUpdatedAt)
-            return;
-
         var existingNode = clusterState.Nodes.FirstOrDefault(n => n.NodeId == change.NodeId);
+
         if (existingNode != null)
         {
+            if (change.NewStatus == NodeStatus.Failed)
+            {
+                _logger.LogWarning("Node {NodeId} marked as failed via gossip", change.NodeId);
+                _nodeState.RemoveNode(change.NodeId);
+                return;
+            }
+
             _nodeState.UpdateNodeStatus(change.NodeId, change.NewStatus);
 
             if (change.NewStatus == NodeStatus.Online)
             {
                 _nodeState.TouchLastSeen(change.NodeId);
-            }
-            else if (change.NewStatus == NodeStatus.Failed)
-            {
-                _logger.LogWarning("Node {NodeId} marked as failed via gossip", change.NodeId);
-                _nodeState.RemoveNode(change.NodeId);
             }
         }
         else if (change.NewStatus == NodeStatus.Online || change.NewStatus == NodeStatus.Joining)
@@ -178,26 +175,17 @@ public class GossipService : IGossipService
                 Status = change.NewStatus
             });
         }
-
-        _nodeState.UpdateClusterState(new Shared.Models.ClusterState
-        {
-            ClusterLastUpdatedAt = clusterLastUpdatedAt,
-            ReplicationFactor = clusterState.ReplicationFactor,
-            Nodes = _nodeState.GetClusterState().Nodes
-        });
     }
 
     // ####################### Node Join Handling
     public async Task BroadcastNodeJoinAsync(Guid nodeId, string baseUrl)
     {
         var currentNode = _nodeState.GetCurrentNode();
-        var lastUpdatedAt = _nodeState.TouchLastUpdated();
         var hashRing = new ConsistentHashRing();
 
         var message = new GossipMessage
         {
             MessageId = Guid.NewGuid(),
-            ClusterLastUpdatedAt = lastUpdatedAt,
             SenderNodeId = currentNode.NodeId,
             Topic = GossipTopic.NodeJoin,
             Payload = new GossipPayload
@@ -215,14 +203,11 @@ public class GossipService : IGossipService
         await BroadcastGossipAsync(message);
     }
 
-    private void ApplyNodeJoin(NodeJoinInfo joinInfo, DateTime clusterLastUpdatedAt)
+    private void ApplyNodeJoin(NodeJoinInfo joinInfo)
     {
         var clusterState = _nodeState.GetClusterState();
-
-        if (clusterLastUpdatedAt <= clusterState.ClusterLastUpdatedAt)
-            return;
-
         var existingNode = clusterState.Nodes.FirstOrDefault(n => n.NodeId == joinInfo.NodeId);
+
         if (existingNode == null)
         {
             _nodeState.AddNode(new Shared.Models.ClusterNodeInfo
@@ -235,24 +220,15 @@ public class GossipService : IGossipService
 
             _logger.LogInformation("Node {NodeId} added as Joining via gossip", joinInfo.NodeId);
         }
-
-        _nodeState.UpdateClusterState(new Shared.Models.ClusterState
-        {
-            ClusterLastUpdatedAt = clusterLastUpdatedAt,
-            ReplicationFactor = clusterState.ReplicationFactor,
-            Nodes = _nodeState.GetClusterState().Nodes
-        });
     }
 
     public async Task BroadcastNodeSuspicionAsync(Guid suspectedNodeId, List<Guid> verifierNodeIds)
     {
         var currentNode = _nodeState.GetCurrentNode();
-        var lastUpdatedAt = _nodeState.TouchLastUpdated();
 
         var message = new GossipMessage
         {
             MessageId = Guid.NewGuid(),
-            ClusterLastUpdatedAt = lastUpdatedAt,
             SenderNodeId = currentNode.NodeId,
             Topic = GossipTopic.NodeSuspicion,
             Payload = new GossipPayload
@@ -269,12 +245,9 @@ public class GossipService : IGossipService
         await BroadcastGossipAsync(message);
     }
 
-    private void ApplyNodeSuspicion(NodeSuspicionInfo suspicion, DateTime clusterLastUpdatedAt)
+    private void ApplyNodeSuspicion(NodeSuspicionInfo suspicion)
     {
         var clusterState = _nodeState.GetClusterState();
-
-        if (clusterLastUpdatedAt <= clusterState.ClusterLastUpdatedAt)
-            return;
 
         var targetNode = clusterState.Nodes.FirstOrDefault(n => n.NodeId == suspicion.SuspectedNodeId);
         if (targetNode == null)
@@ -283,13 +256,6 @@ public class GossipService : IGossipService
         _nodeState.UpdateNodeStatus(suspicion.SuspectedNodeId, NodeStatus.Suspect);
 
         _logger.LogWarning("Node {NodeId} marked as SUSPECT via gossip (verifiers: {VerifierNodeIds})", suspicion.SuspectedNodeId, string.Join(", ", suspicion.VerifierNodeIds));
-
-        _nodeState.UpdateClusterState(new Shared.Models.ClusterState
-        {
-            ClusterLastUpdatedAt = clusterLastUpdatedAt,
-            ReplicationFactor = clusterState.ReplicationFactor,
-            Nodes = _nodeState.GetClusterState().Nodes
-        });
 
         var currentNode = _nodeState.GetCurrentNode();
         if (suspicion.VerifierNodeIds.Contains(currentNode.NodeId))
@@ -318,6 +284,7 @@ public class GossipService : IGossipService
             _logger.LogInformation("Verification ping to suspected node {NodeId} succeeded; broadcasting online status", targetNode.NodeId);
 
             _nodeState.TouchLastSeen(targetNode.NodeId);
+            _nodeState.UpdateNodeStatus(targetNode.NodeId, NodeStatus.Online);
 
             await BroadcastNodeStatusChangeAsync(new List<NodeStatusChange>
             {
