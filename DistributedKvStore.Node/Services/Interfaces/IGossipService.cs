@@ -8,4 +8,5 @@ public interface IGossipService
     Task BroadcastGossipAsync(GossipMessage message);
     Task BroadcastNodeStatusChangeAsync(List<NodeStatusChange> changes);
     Task BroadcastNodeSuspicionAsync(Guid suspectedNodeId, List<Guid> verifierNodeIds);
+    Task BroadcastNodeJoinAsync(Guid nodeId, string baseUrl);
 }

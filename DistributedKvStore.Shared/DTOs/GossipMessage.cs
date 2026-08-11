@@ -16,6 +16,7 @@ public class GossipPayload
 {
     public List<NodeStatusChange>? NodeStatusChanges { get; set; } = new();
     public NodeSuspicionInfo? NodeSuspicion { get; set; }
+    public NodeJoinInfo? NodeJoin { get; set; }
 }
 
 public class NodeStatusChange
@@ -30,4 +31,11 @@ public class NodeSuspicionInfo
 {
     public Guid SuspectedNodeId { get; set; }
     public List<Guid> VerifierNodeIds { get; set; } = new();
+}
+
+public class NodeJoinInfo
+{
+    public Guid NodeId { get; set; }
+    public string BaseUrl { get; set; } = string.Empty;
+    public ulong HashPosition { get; set; }
 }

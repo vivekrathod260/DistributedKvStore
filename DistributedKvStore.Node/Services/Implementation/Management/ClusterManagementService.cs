@@ -56,8 +56,7 @@ public class ClusterManagementService : IClusterManagementService
 
         _logger.LogInformation("Adding node {NodeId} at position {Position}", newNode.NodeId, hashPosition);
 
-        // Push the current cluster state (including the new node itself) to the new node,
-        // so it doesn't start out only aware of itself.
+        // Push the current cluster state (including the new node itself) to the new node, so it doesn't start out only aware of itself.
         try
         {
             var client = _httpClientFactory.CreateClient("InternalNode");
@@ -72,21 +71,8 @@ public class ClusterManagementService : IClusterManagementService
             _logger.LogWarning(ex, "Could not push cluster state to new node {BaseUrl}", baseUrl);
         }
 
-        // Mark node online
-        _nodeState.UpdateNodeStatus(newNode.NodeId, NodeStatus.Online);
-        _nodeState.TouchLastUpdated();
-
-        // Broadcast gossip
-        await _gossipService.BroadcastNodeStatusChangeAsync(new List<NodeStatusChange>
-        {
-            new()
-            {
-                NodeId = newNode.NodeId,
-                NewStatus = NodeStatus.Online,
-                BaseUrl = newNode.BaseUrl,
-                HashPosition = newNode.HashPosition
-            }
-        });
+        // Gossip the join so all other nodes add the new node to their state as Joining.
+        await _gossipService.BroadcastNodeJoinAsync(newNode.NodeId, newNode.BaseUrl);
 
         return _nodeState.GetClusterState();
     }

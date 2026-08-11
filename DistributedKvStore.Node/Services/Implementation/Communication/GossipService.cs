@@ -4,6 +4,7 @@ using DistributedKvStore.Node.Services.Implementation.State;
 using DistributedKvStore.Node.Services.Interfaces;
 using DistributedKvStore.Shared.DTOs;
 using DistributedKvStore.Shared.Enums;
+using DistributedKvStore.Shared.Hashing;
 using Microsoft.Extensions.Logging;
 
 namespace DistributedKvStore.Node.Services.Implementation.Communication;
@@ -85,6 +86,10 @@ public class GossipService : IGossipService
         else if (message.Topic == GossipTopic.NodeSuspicion && message.Payload.NodeSuspicion != null)
         {
             ApplyNodeSuspicion(message.Payload.NodeSuspicion, message.ClusterLastUpdatedAt);
+        }
+        else if (message.Topic == GossipTopic.NodeJoin && message.Payload.NodeJoin != null)
+        {
+            ApplyNodeJoin(message.Payload.NodeJoin, message.ClusterLastUpdatedAt);
         }
 
         // Forward to other nodes
@@ -172,6 +177,63 @@ public class GossipService : IGossipService
                 HashPosition = change.HashPosition,
                 Status = change.NewStatus
             });
+        }
+
+        _nodeState.UpdateClusterState(new Shared.Models.ClusterState
+        {
+            ClusterLastUpdatedAt = clusterLastUpdatedAt,
+            ReplicationFactor = clusterState.ReplicationFactor,
+            Nodes = _nodeState.GetClusterState().Nodes
+        });
+    }
+
+    // ####################### Node Join Handling
+    public async Task BroadcastNodeJoinAsync(Guid nodeId, string baseUrl)
+    {
+        var currentNode = _nodeState.GetCurrentNode();
+        var lastUpdatedAt = _nodeState.TouchLastUpdated();
+        var hashRing = new ConsistentHashRing();
+
+        var message = new GossipMessage
+        {
+            MessageId = Guid.NewGuid(),
+            ClusterLastUpdatedAt = lastUpdatedAt,
+            SenderNodeId = currentNode.NodeId,
+            Topic = GossipTopic.NodeJoin,
+            Payload = new GossipPayload
+            {
+                NodeJoin = new NodeJoinInfo
+                {
+                    NodeId = nodeId,
+                    BaseUrl = baseUrl,
+                    HashPosition = hashRing.ComputeHash(baseUrl)
+                }
+            },
+            TimestampUtc = DateTime.UtcNow
+        };
+
+        await BroadcastGossipAsync(message);
+    }
+
+    private void ApplyNodeJoin(NodeJoinInfo joinInfo, DateTime clusterLastUpdatedAt)
+    {
+        var clusterState = _nodeState.GetClusterState();
+
+        if (clusterLastUpdatedAt <= clusterState.ClusterLastUpdatedAt)
+            return;
+
+        var existingNode = clusterState.Nodes.FirstOrDefault(n => n.NodeId == joinInfo.NodeId);
+        if (existingNode == null)
+        {
+            _nodeState.AddNode(new Shared.Models.ClusterNodeInfo
+            {
+                NodeId = joinInfo.NodeId,
+                BaseUrl = joinInfo.BaseUrl,
+                HashPosition = joinInfo.HashPosition,
+                Status = NodeStatus.Joining
+            });
+
+            _logger.LogInformation("Node {NodeId} added as Joining via gossip", joinInfo.NodeId);
         }
 
         _nodeState.UpdateClusterState(new Shared.Models.ClusterState
