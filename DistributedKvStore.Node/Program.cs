@@ -45,7 +45,6 @@ builder.Services.AddHttpClient("InternalNode", client =>
 
 // Background Services
 builder.Services.AddHostedService<HeartbeatService>();
-builder.Services.AddHostedService<RecoverySyncService>();
 
 // Controllers
 builder.Services.AddControllers();

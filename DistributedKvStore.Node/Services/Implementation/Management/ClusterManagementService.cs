@@ -80,14 +80,6 @@ public class ClusterManagementService : IClusterManagementService
     {
         _nodeState.UpdateNodeStatus(nodeId, NodeStatus.Leaving);
 
-        _logger.LogInformation("Removing node {NodeId}", nodeId);
-
-        // Migrate data from leaving node
-        await _migrationService.MigrateFromLeavingNodeAsync(nodeId);
-
-        // Remove from cluster
-        _nodeState.RemoveNode(nodeId);
-
         // Gossip removal
         await _gossipService.BroadcastNodeStatusChangeAsync(new List<NodeStatusChange>
         {
