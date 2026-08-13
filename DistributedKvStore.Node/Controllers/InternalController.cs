@@ -78,34 +78,6 @@ public class InternalController : ControllerBase
         return Ok();
     }
 
-    [HttpPost("sync")]
-    public async Task<IActionResult> Sync([FromBody] SyncRequest request)
-    {
-        var operations = await _repository.GetOperationsAfterAsync(request.LastOperationId);
-        var lastOpId = await _repository.GetLastOperationIdAsync();
-
-        var response = new SyncResponse
-        {
-            Operations = operations,
-            LatestOperationId = lastOpId
-        };
-        return Ok(response);
-    }
-
-    [HttpGet("operations")]
-    public async Task<IActionResult> GetOperations([FromQuery] long after = 0)
-    {
-        var operations = await _repository.GetOperationsAfterAsync(after);
-        var lastOpId = await _repository.GetLastOperationIdAsync();
-
-        var response = new SyncResponse
-        {
-            Operations = operations,
-            LatestOperationId = lastOpId
-        };
-        return Ok(response);
-    }
-
     [HttpGet("heartbeat")]
     public IActionResult Heartbeat()
     {

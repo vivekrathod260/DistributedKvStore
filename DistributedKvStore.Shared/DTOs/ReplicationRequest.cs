@@ -9,6 +9,5 @@ public class ReplicationRequest
     public string? Value { get; set; }
     public OperationType OperationType { get; set; }
     public DateTime TimestampUtc { get; set; }
-    public long OperationId { get; set; }
     public ulong Hash { get; set; }
 }

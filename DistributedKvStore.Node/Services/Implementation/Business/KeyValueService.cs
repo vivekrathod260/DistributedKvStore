@@ -59,17 +59,7 @@ public class KeyValueService : IKeyValueService
 
         await _repository.PutAsync(record);
 
-        var operation = new OperationLog
-        {
-            Key = key,
-            Value = value,
-            OperationType = OperationType.Put,
-            TimestampUtc = timestamp
-        };
-
-        var operationId = await _repository.ApplyOperationAsync(operation);
-
-        _ = Task.Run(() => ReplicateAsync(key, value, OperationType.Put, timestamp, operationId, hash));
+        _ = Task.Run(() => ReplicateAsync(key, value, OperationType.Put, timestamp, hash));
     }
 
     public async Task UpdateAsync(string key, string value)
@@ -89,17 +79,7 @@ public class KeyValueService : IKeyValueService
 
         await _repository.PutAsync(record);
 
-        var operation = new OperationLog
-        {
-            Key = key,
-            Value = value,
-            OperationType = OperationType.Update,
-            TimestampUtc = timestamp
-        };
-
-        var operationId = await _repository.ApplyOperationAsync(operation);
-
-        _ = Task.Run(() => ReplicateAsync(key, value, OperationType.Update, timestamp, operationId, hash));
+        _ = Task.Run(() => ReplicateAsync(key, value, OperationType.Update, timestamp, hash));
     }
 
     public async Task DeleteAsync(string key)
@@ -110,20 +90,10 @@ public class KeyValueService : IKeyValueService
 
         await _repository.DeleteAsync(key, timestamp);
 
-        var operation = new OperationLog
-        {
-            Key = key,
-            Value = null,
-            OperationType = OperationType.Delete,
-            TimestampUtc = timestamp
-        };
-
-        var operationId = await _repository.ApplyOperationAsync(operation);
-
-        _ = Task.Run(() => ReplicateAsync(key, null, OperationType.Delete, timestamp, operationId, hash));
+        _ = Task.Run(() => ReplicateAsync(key, null, OperationType.Delete, timestamp, hash));
     }
 
-    private async Task ReplicateAsync(string key, string? value, OperationType opType, DateTime timestamp, long operationId, ulong hash)
+    private async Task ReplicateAsync(string key, string? value, OperationType opType, DateTime timestamp, ulong hash)
     {
         try
         {
@@ -142,7 +112,6 @@ public class KeyValueService : IKeyValueService
                 Value = value,
                 OperationType = opType,
                 TimestampUtc = timestamp,
-                OperationId = operationId,
                 Hash = hash
             };
 
@@ -150,7 +119,7 @@ public class KeyValueService : IKeyValueService
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Replication failed for key {Key}. Recovery sync will handle it.", key);
+            _logger.LogWarning(ex, "Replication failed for key {Key}.", key);
         }
     }
 
@@ -173,15 +142,5 @@ public class KeyValueService : IKeyValueService
 
             await _repository.PutAsync(record);
         }
-
-        var operation = new OperationLog
-        {
-            Key = request.Key,
-            Value = request.Value,
-            OperationType = request.OperationType,
-            TimestampUtc = request.TimestampUtc
-        };
-
-        await _repository.ApplyOperationAsync(operation);
     }
 }

@@ -54,7 +54,6 @@ public class ReplicationService : IReplicationService
                 await Task.Delay(RetryDelay);
         }
 
-        _logger.LogWarning("Replication to node {NodeId} for key {Key} exhausted retries. Recovery sync will handle it.",
-            targetNode.NodeId, request.Key);
+        _logger.LogWarning("Replication to node {NodeId} for key {Key} exhausted retries.", targetNode.NodeId, request.Key);
     }
 }
