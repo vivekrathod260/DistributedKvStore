@@ -1,6 +1,9 @@
 using System.Net.Http.Json;
+using DistributedKvStore.Node.Data;
+using DistributedKvStore.Node.Services.Implementation.State;
 using DistributedKvStore.Node.Services.Interfaces;
 using DistributedKvStore.Shared.DTOs;
+using DistributedKvStore.Shared.Enums;
 using DistributedKvStore.Shared.Models;
 using Microsoft.Extensions.Logging;
 
@@ -9,14 +12,73 @@ namespace DistributedKvStore.Node.Services.Implementation.DataExchange;
 public class ReplicationService : IReplicationService
 {
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly INodeStateService _nodeState;
+    private readonly IDataRepository _repository;
     private readonly ILogger<ReplicationService> _logger;
     private const int MaxRetries = 3;
     private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(500);
 
-    public ReplicationService(IHttpClientFactory httpClientFactory, ILogger<ReplicationService> logger)
+    public ReplicationService(
+        IHttpClientFactory httpClientFactory,
+        INodeStateService nodeState,
+        IDataRepository repository,
+        ILogger<ReplicationService> logger)
     {
         _httpClientFactory = httpClientFactory;
+        _nodeState = nodeState;
+        _repository = repository;
         _logger = logger;
+    }
+
+    public async Task ReplicateAsync(string key, string? value, OperationType opType, DateTime timestamp, ulong hash)
+    {
+        try
+        {
+            var replicationFactor = _nodeState.GetReplicationFactor();
+            var hashRing = _nodeState.GetHashRing();
+            var replicas = hashRing.FindReplicaNodes(key, replicationFactor);
+            var currentNode = _nodeState.GetCurrentNode();
+
+            var targetReplicas = replicas
+                .Where(r => r.NodeId != currentNode.NodeId)
+                .ToList();
+
+            var request = new ReplicationRequest
+            {
+                Key = key,
+                Value = value,
+                OperationType = opType,
+                TimestampUtc = timestamp,
+                Hash = hash
+            };
+
+            await ReplicateToNodesAsync(request, targetReplicas);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Replication failed for key {Key}.", key);
+        }
+    }
+
+    public async Task ApplyReplicationAsync(ReplicationRequest request)
+    {
+        if (request.OperationType == OperationType.Delete)
+        {
+            await _repository.DeleteAsync(request.Key, request.TimestampUtc);
+        }
+        else
+        {
+            var record = new KeyValueRecord
+            {
+                Key = request.Key,
+                Value = request.Value ?? string.Empty,
+                Hash = request.Hash,
+                LastUpdatedUtc = request.TimestampUtc,
+                IsDeleted = false
+            };
+
+            await _repository.PutAsync(record);
+        }
     }
 
     public async Task ReplicateToNodesAsync(ReplicationRequest request, List<ClusterNodeInfo> targetNodes)

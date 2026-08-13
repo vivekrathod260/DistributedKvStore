@@ -11,7 +11,7 @@ namespace DistributedKvStore.Node.Controllers;
 [Route("internal")]
 public class InternalController : ControllerBase
 {
-    private readonly IKeyValueService _kvService;
+    private readonly IReplicationService _replicationService;
     private readonly IGossipService _gossipService;
     private readonly INodeStateService _nodeState;
     private readonly IDataRepository _repository;
@@ -19,14 +19,14 @@ public class InternalController : ControllerBase
     private readonly ILogger<InternalController> _logger;
 
     public InternalController(
-        IKeyValueService kvService,
+        IReplicationService replicationService,
         IGossipService gossipService,
         INodeStateService nodeState,
         IDataRepository repository,
         IHttpClientFactory httpClientFactory,
         ILogger<InternalController> logger)
     {
-        _kvService = kvService;
+        _replicationService = replicationService;
         _gossipService = gossipService;
         _nodeState = nodeState;
         _repository = repository;
@@ -37,7 +37,7 @@ public class InternalController : ControllerBase
     [HttpPost("replication")]
     public async Task<IActionResult> Replication([FromBody] ReplicationRequest request)
     {
-        await _kvService.ApplyReplicationAsync(request);
+        await _replicationService.ApplyReplicationAsync(request);
         return Ok();
     }
 

@@ -4,7 +4,6 @@ using DistributedKvStore.Node.Services.Interfaces;
 using DistributedKvStore.Shared.DTOs;
 using DistributedKvStore.Shared.Enums;
 using DistributedKvStore.Shared.Models;
-using Microsoft.Extensions.Logging;
 
 namespace DistributedKvStore.Node.Services.Implementation.Business;
 
@@ -13,18 +12,15 @@ public class KeyValueService : IKeyValueService
     private readonly IDataRepository _repository;
     private readonly INodeStateService _nodeState;
     private readonly IReplicationService _replicationService;
-    private readonly ILogger<KeyValueService> _logger;
 
     public KeyValueService(
         IDataRepository repository,
         INodeStateService nodeState,
-        IReplicationService replicationService,
-        ILogger<KeyValueService> logger)
+        IReplicationService replicationService)
     {
         _repository = repository;
         _nodeState = nodeState;
         _replicationService = replicationService;
-        _logger = logger;
     }
 
     public async Task<KeyValueResponse?> GetAsync(string key)
@@ -59,7 +55,7 @@ public class KeyValueService : IKeyValueService
 
         await _repository.PutAsync(record);
 
-        _ = Task.Run(() => ReplicateAsync(key, value, OperationType.Put, timestamp, hash));
+        _ = Task.Run(() => _replicationService.ReplicateAsync(key, value, OperationType.Put, timestamp, hash));
     }
 
     public async Task UpdateAsync(string key, string value)
@@ -79,7 +75,7 @@ public class KeyValueService : IKeyValueService
 
         await _repository.PutAsync(record);
 
-        _ = Task.Run(() => ReplicateAsync(key, value, OperationType.Update, timestamp, hash));
+        _ = Task.Run(() => _replicationService.ReplicateAsync(key, value, OperationType.Update, timestamp, hash));
     }
 
     public async Task DeleteAsync(string key)
@@ -90,57 +86,6 @@ public class KeyValueService : IKeyValueService
 
         await _repository.DeleteAsync(key, timestamp);
 
-        _ = Task.Run(() => ReplicateAsync(key, null, OperationType.Delete, timestamp, hash));
-    }
-
-    private async Task ReplicateAsync(string key, string? value, OperationType opType, DateTime timestamp, ulong hash)
-    {
-        try
-        {
-            var replicationFactor = _nodeState.GetReplicationFactor();
-            var hashRing = _nodeState.GetHashRing();
-            var replicas = hashRing.FindReplicaNodes(key, replicationFactor);
-            var currentNode = _nodeState.GetCurrentNode();
-
-            var targetReplicas = replicas
-                .Where(r => r.NodeId != currentNode.NodeId)
-                .ToList();
-
-            var request = new ReplicationRequest
-            {
-                Key = key,
-                Value = value,
-                OperationType = opType,
-                TimestampUtc = timestamp,
-                Hash = hash
-            };
-
-            await _replicationService.ReplicateToNodesAsync(request, targetReplicas);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Replication failed for key {Key}.", key);
-        }
-    }
-
-    public async Task ApplyReplicationAsync(ReplicationRequest request)
-    {
-        if (request.OperationType == OperationType.Delete)
-        {
-            await _repository.DeleteAsync(request.Key, request.TimestampUtc);
-        }
-        else
-        {
-            var record = new KeyValueRecord
-            {
-                Key = request.Key,
-                Value = request.Value ?? string.Empty,
-                Hash = request.Hash,
-                LastUpdatedUtc = request.TimestampUtc,
-                IsDeleted = false
-            };
-
-            await _repository.PutAsync(record);
-        }
+        _ = Task.Run(() => _replicationService.ReplicateAsync(key, null, OperationType.Delete, timestamp, hash));
     }
 }

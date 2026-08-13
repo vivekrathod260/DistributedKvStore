@@ -9,5 +9,4 @@ public interface IKeyValueService
     Task PutAsync(string key, string value);
     Task UpdateAsync(string key, string value);
     Task DeleteAsync(string key);
-    Task ApplyReplicationAsync(ReplicationRequest request);
 }
