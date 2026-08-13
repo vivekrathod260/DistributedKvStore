@@ -109,4 +109,43 @@ public class ConsistentHashRing : IHashRing
             return new List<ClusterNodeInfo>(_sortedNodes);
         }
     }
+
+    public ClusterNodeInfo? GetNodeByOffset(Guid currentNodeId, int offset)
+    {
+        lock (_lock)
+        {
+            var count = _sortedNodes.Count;
+            if (count == 0)
+                return null;
+
+            var index = _sortedNodes.FindIndex(n => n.NodeId == currentNodeId);
+            if (index == -1)
+                return null;
+
+            offset %= count;
+
+            var newIndex = (index + offset + count) % count;
+            return _sortedNodes[newIndex];
+        }
+    }
+
+    public (ulong Start, ulong End)? GetHashRange(Guid nodeId)
+    {
+        lock (_lock)
+        {
+            var count = _sortedNodes.Count;
+            if (count == 0)
+                return null;
+
+            var index = _sortedNodes.FindIndex(n => n.NodeId == nodeId);
+            if (index == -1)
+                return null;
+
+            var predecessorIndex = (index - 1 + count) % count;
+            var predecessor = _sortedNodes[predecessorIndex];
+            var node = _sortedNodes[index];
+
+            return (Start: unchecked(predecessor.HashPosition + 1), End: node.HashPosition);
+        }
+    }
 }
