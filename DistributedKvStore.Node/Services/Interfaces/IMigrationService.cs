@@ -1,9 +1,11 @@
 using DistributedKvStore.Shared.DTOs;
+using DistributedKvStore.Shared.Models;
 
 namespace DistributedKvStore.Node.Services.Interfaces;
 
 public interface IMigrationService
 {
     Task OnboardSelfAsync();
-    Task RebalanceOnNodeJoinAsync(GossipMessage message);
+    Task ProcessGossipMessageAsync(GossipMessage message);
+    Task RebalanceOnNodeRemovalAsync(ClusterNodeInfo offlineNode);
 }

@@ -86,7 +86,15 @@ public class MigrationService : IMigrationService
             currentNode.NodeId, replicaCount, successor.NodeId);
     }
 
-    public async Task RebalanceOnNodeJoinAsync(GossipMessage message)
+    // Gossip message processing
+    public async Task ProcessGossipMessageAsync(GossipMessage message)
+    {
+        await CheckNodeRemovalRebalancing(message);
+        await RebalanceOnNodeJoinAsync(message);
+    }
+
+    // Node join
+    private async Task RebalanceOnNodeJoinAsync(GossipMessage message)
     {
         if(message.Topic != GossipTopic.NodeStatusChange || message.Payload.NodeStatusChanges == null)  return;
 
@@ -124,7 +132,66 @@ public class MigrationService : IMigrationService
         await _repository.DeleteRecordsInHashRangeAsync(range.Value.Start, range.Value.End);
     }
 
-    private async Task<int> PullRangeAsync(HttpClient client, Guid requestingNodeId, ClusterNodeInfo successor, ulong rangeStart, ulong rangeEnd)
+    // Node removal
+    private async Task CheckNodeRemovalRebalancing(GossipMessage message)
+    {
+        if(message.Topic != GossipTopic.NodeStatusChange || message.Payload.NodeStatusChanges == null)  return;
+
+        var nodeChange = message.Payload.NodeStatusChanges.FirstOrDefault();
+        if (nodeChange?.NewStatus != NodeStatus.Leaving) return;
+
+        var clusterState = _nodeState.GetClusterState();
+        var offlineNode = clusterState.Nodes.FirstOrDefault(n => n.NodeId == nodeChange.NodeId);
+        if (offlineNode == null || offlineNode.Status != NodeStatus.Online) return;
+
+        await RebalanceOnNodeRemovalAsync(offlineNode);
+    }
+
+    // Rebalance data when given node goes offline
+    public async Task RebalanceOnNodeRemovalAsync(ClusterNodeInfo offlineNode)
+    {
+        var hashRing = _nodeState.GetHashRing();
+        var replicationFactor = _nodeState.GetReplicationFactor();
+
+        var totalNodes = hashRing.GetSortedNodes().Count;
+        if (totalNodes <= replicationFactor) return;
+
+        var effectedNodes = new HashSet<Guid>();
+        for(int i = 1; i <= replicationFactor + 1; i++)
+        {
+            var effectedNode = hashRing.GetNodeByOffset(offlineNode.NodeId, i);
+            if (effectedNode == null || !effectedNodes.Add(effectedNode.NodeId)) break;
+        }
+
+        var currentNode = _nodeState.GetCurrentNode();
+        if(!effectedNodes.Contains(currentNode.NodeId)) return;
+
+        ClusterNodeInfo? targetNode;
+        (ulong Start, ulong End)? reqRange;
+
+        if(hashRing.GetNodeByOffset(currentNode.NodeId, -(replicationFactor+1))?.NodeId == offlineNode.NodeId)
+        {
+            targetNode = hashRing.GetNodeByOffset(currentNode.NodeId, -replicationFactor);
+            reqRange = hashRing.GetHashRange(hashRing.GetNodeByOffset(currentNode.NodeId, -(replicationFactor+1))?.NodeId ?? Guid.Empty);
+        }
+        else
+        {
+            targetNode = hashRing.GetNodeByOffset(currentNode.NodeId, -(replicationFactor+1));
+            reqRange = hashRing.GetHashRange(targetNode?.NodeId ?? Guid.Empty);
+        }
+
+        if(targetNode == null || reqRange == null) return;
+
+        var client = _httpClientFactory.CreateClient("InternalNode");
+        client.Timeout = TimeSpan.FromSeconds(60);
+        client.BaseAddress = new Uri(targetNode.BaseUrl);
+
+        var replicaCount = await PullRangeAsync(client, currentNode.NodeId, targetNode, reqRange.Value.Start, reqRange.Value.End);
+        _logger.LogInformation("Fetched {Count} replicated record(s) from Node {NodeId}", replicaCount, targetNode.NodeId);
+    }
+
+    // copy given range records from the target node
+    private async Task<int> PullRangeAsync(HttpClient client, Guid requestingNodeId, ClusterNodeInfo targetDataNode, ulong rangeStart, ulong rangeEnd)
     {
         try
         {
@@ -139,8 +206,8 @@ public class MigrationService : IMigrationService
             if (!response.IsSuccessStatusCode)
             {
                 _logger.LogWarning(
-                    "Successor {SuccessorId} returned {StatusCode} for range [{Start}, {End}]",
-                    successor.NodeId, response.StatusCode, rangeStart, rangeEnd);
+                    "Target node {TargetNodeId} returned {StatusCode} for range [{Start}, {End}]",
+                    targetDataNode.NodeId, response.StatusCode, rangeStart, rangeEnd);
                 return 0;
             }
 
@@ -153,8 +220,8 @@ public class MigrationService : IMigrationService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to pull hash range [{Start}, {End}] from successor {SuccessorId}",
-                rangeStart, rangeEnd, successor.NodeId);
+            _logger.LogError(ex, "Failed to pull hash range [{Start}, {End}] from target node {TargetNodeId}",
+                rangeStart, rangeEnd, targetDataNode.NodeId);
             return 0;
         }
     }
