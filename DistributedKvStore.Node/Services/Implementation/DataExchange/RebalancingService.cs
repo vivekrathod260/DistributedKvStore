@@ -10,18 +10,18 @@ using Microsoft.Extensions.Logging;
 
 namespace DistributedKvStore.Node.Services.Implementation.DataExchange;
 
-public class MigrationService : IMigrationService
+public class RebalancingService : IRebalancingService
 {
     private readonly INodeStateService _nodeState;
     private readonly IDataRepository _repository;
     private readonly IHttpClientFactory _httpClientFactory;
-    private readonly ILogger<MigrationService> _logger;
+    private readonly ILogger<RebalancingService> _logger;
 
-    public MigrationService(
+    public RebalancingService(
         INodeStateService nodeState,
         IDataRepository repository,
         IHttpClientFactory httpClientFactory,
-        ILogger<MigrationService> logger)
+        ILogger<RebalancingService> logger)
     {
         _nodeState = nodeState;
         _repository = repository;

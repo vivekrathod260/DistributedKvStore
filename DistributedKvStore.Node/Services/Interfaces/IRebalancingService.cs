@@ -3,7 +3,7 @@ using DistributedKvStore.Shared.Models;
 
 namespace DistributedKvStore.Node.Services.Interfaces;
 
-public interface IMigrationService
+public interface IRebalancingService
 {
     Task OnboardSelfAsync();
     Task ProcessGossipMessageAsync(GossipMessage message);

@@ -13,20 +13,20 @@ public class ClusterManagementService : IClusterManagementService
 {
     private readonly INodeStateService _nodeState;
     private readonly IGossipService _gossipService;
-    private readonly IMigrationService _migrationService;
+    private readonly IRebalancingService _rebalancingService;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<ClusterManagementService> _logger;
 
     public ClusterManagementService(
         INodeStateService nodeState,
         IGossipService gossipService,
-        IMigrationService migrationService,
+        IRebalancingService rebalancingService,
         IHttpClientFactory httpClientFactory,
         ILogger<ClusterManagementService> logger)
     {
         _nodeState = nodeState;
         _gossipService = gossipService;
-        _migrationService = migrationService;
+        _rebalancingService = rebalancingService;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
     }

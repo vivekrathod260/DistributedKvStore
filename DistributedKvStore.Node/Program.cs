@@ -34,7 +34,7 @@ builder.Services.AddScoped<IDataRepository, SqliteDataRepository>();
 builder.Services.AddScoped<IKeyValueService, KeyValueService>();
 builder.Services.AddSingleton<IGossipService, GossipService>();
 builder.Services.AddScoped<IReplicationService, ReplicationService>();
-builder.Services.AddScoped<IMigrationService, MigrationService>();
+builder.Services.AddScoped<IRebalancingService, RebalancingService>();
 builder.Services.AddScoped<IClusterManagementService, ClusterManagementService>();
 
 // HttpClient

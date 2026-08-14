@@ -15,7 +15,7 @@ public class InternalController : ControllerBase
     private readonly IGossipService _gossipService;
     private readonly INodeStateService _nodeState;
     private readonly IDataRepository _repository;
-    private readonly IMigrationService _migrationService;
+    private readonly IRebalancingService _rebalancingService;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<InternalController> _logger;
 
@@ -24,7 +24,7 @@ public class InternalController : ControllerBase
         IGossipService gossipService,
         INodeStateService nodeState,
         IDataRepository repository,
-        IMigrationService migrationService,
+        IRebalancingService rebalancingService,
         IHttpClientFactory httpClientFactory,
         ILogger<InternalController> logger)
     {
@@ -32,7 +32,7 @@ public class InternalController : ControllerBase
         _gossipService = gossipService;
         _nodeState = nodeState;
         _repository = repository;
-        _migrationService = migrationService;
+        _rebalancingService = rebalancingService;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
     }
@@ -78,7 +78,7 @@ public class InternalController : ControllerBase
     public IActionResult SetClusterState([FromBody] ClusterState state)
     {
         _nodeState.UpdateClusterState(state);
-        _migrationService.OnboardSelfAsync();
+        _rebalancingService.OnboardSelfAsync();
         return Ok();
     }
 
