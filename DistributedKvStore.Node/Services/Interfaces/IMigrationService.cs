@@ -1,9 +1,9 @@
-using DistributedKvStore.Shared.Models;
+using DistributedKvStore.Shared.DTOs;
 
 namespace DistributedKvStore.Node.Services.Interfaces;
 
 public interface IMigrationService
 {
-    Task MigrateToNewNodeAsync(ClusterNodeInfo newNode);
-    Task MigrateFromLeavingNodeAsync(Guid leavingNodeId);
+    Task OnboardSelfAsync();
+    Task RebalanceOnNodeJoinAsync(GossipMessage message);
 }

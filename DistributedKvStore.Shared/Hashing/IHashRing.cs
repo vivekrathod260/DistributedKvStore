@@ -11,4 +11,5 @@ public interface IHashRing
     List<ClusterNodeInfo> GetResponsibleNodes(string key, int replicationFactor);
     ClusterNodeInfo? GetNodeByOffset(Guid currentNodeId, int offset);
     (ulong Start, ulong End)? GetHashRange(Guid nodeId);
+    List<ClusterNodeInfo> GetSortedNodes();
 }

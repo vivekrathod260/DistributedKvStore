@@ -29,138 +29,134 @@ public class MigrationService : IMigrationService
         _logger = logger;
     }
 
-    public async Task MigrateToNewNodeAsync(ClusterNodeInfo newNode)
+    public async Task OnboardSelfAsync()
     {
         var currentNode = _nodeState.GetCurrentNode();
-        var clusterState = _nodeState.GetClusterState();
+        var hashRing = _nodeState.GetHashRing();
+        var replicationFactor = _nodeState.GetReplicationFactor();
 
-        // Find the predecessor of the new node to determine the hash range it now owns
-        var sortedNodes = clusterState.Nodes
-            .Where(n => n.Status == NodeStatus.Online || n.Status == NodeStatus.Joining)
-            .OrderBy(n => n.HashPosition)
-            .ToList();
-
-        var newNodeIndex = sortedNodes.FindIndex(n => n.NodeId == newNode.NodeId);
-        if (newNodeIndex < 0) return;
-
-        // The new node's range: from predecessor's position (exclusive) to its own position (inclusive)
-        var predecessorIndex = (newNodeIndex - 1 + sortedNodes.Count) % sortedNodes.Count;
-        var predecessor = sortedNodes[predecessorIndex];
-
-        ulong rangeStart = predecessor.HashPosition + 1;
-        ulong rangeEnd = newNode.HashPosition;
-
-        // Only migrate if this node is the successor (next clockwise after the new node)
-        var successorIndex = (newNodeIndex + 1) % sortedNodes.Count;
-        var successor = sortedNodes[successorIndex];
-
-        if (successor.NodeId != currentNode.NodeId && currentNode.NodeId != newNode.NodeId)
+        var successor = hashRing.GetNodeByOffset(currentNode.NodeId, 1);
+        if (successor == null || successor.NodeId == currentNode.NodeId)
         {
-            // This node is not the successor, skip
+            _logger.LogInformation("Node {NodeId} has no peers to onboard from", currentNode.NodeId);
             return;
         }
 
-        _logger.LogInformation("Migrating keys in range [{Start}, {End}] to new node {NodeId}",
-            rangeStart, rangeEnd, newNode.NodeId);
-
-        var records = await _repository.GetRecordsInHashRangeAsync(rangeStart, rangeEnd);
-        if (records.Count == 0) return;
-
-        // Send records in chunks
-        const int chunkSize = 100;
-        for (int i = 0; i < records.Count; i += chunkSize)
+        var ownRange = hashRing.GetHashRange(currentNode.NodeId);
+        if (ownRange == null)
         {
-            var chunk = records.Skip(i).Take(chunkSize).ToList();
-            try
-            {
-                var client = _httpClientFactory.CreateClient("InternalNode");
-                client.BaseAddress = new Uri(newNode.BaseUrl);
-                client.Timeout = TimeSpan.FromSeconds(30);
-
-                var migrationResponse = await client.PostAsJsonAsync("/internal/migrate", new MigrationResponse
-                {
-                    Records = chunk,
-                    IsComplete = i + chunkSize >= records.Count
-                });
-
-                if (migrationResponse.IsSuccessStatusCode)
-                {
-                    _logger.LogDebug("Migrated chunk of {Count} records to {NodeId}", chunk.Count, newNode.NodeId);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to migrate chunk to node {NodeId}", newNode.NodeId);
-            }
+            _logger.LogWarning("Node {NodeId} is not present in the hash ring; cannot onboard", currentNode.NodeId);
+            return;
         }
 
-        // After successful migration, remove records from this node
-        await _repository.DeleteRecordsInHashRangeAsync(rangeStart, rangeEnd);
-        _logger.LogInformation("Migration to node {NodeId} complete. {Count} records transferred.", newNode.NodeId, records.Count);
+        var client = _httpClientFactory.CreateClient("InternalNode");
+        client.BaseAddress = new Uri(successor.BaseUrl);
+        client.Timeout = TimeSpan.FromSeconds(60);
+
+        // Priority 1: the keys this node is now the primary owner for.
+        var ownCount = await PullRangeAsync(client, currentNode.NodeId, successor, ownRange.Value.Start, ownRange.Value.End);
+        _logger.LogInformation(
+            "Onboarding node {NodeId}: received {Count} primary record(s) from successor {SuccessorId}",
+            currentNode.NodeId, ownCount, successor.NodeId);
+
+        // Priority 2: replica data for the preceding replicationFactor nodes. Their ranges are
+        // contiguous with each other and with this node's own range, so they merge into one span.
+        var farthestNode = currentNode;
+        var seenNodeIds = new HashSet<Guid> { currentNode.NodeId };
+        for (int i = 1; i <= replicationFactor; i++)
+        {
+            var precedingNode = hashRing.GetNodeByOffset(currentNode.NodeId, -i);
+            if (precedingNode == null || !seenNodeIds.Add(precedingNode.NodeId))
+                break; // wrapped all the way around the ring
+
+            farthestNode = precedingNode;
+        }
+
+        if (farthestNode.NodeId == currentNode.NodeId)
+            return; // no preceding nodes to replicate
+
+        var replicationRangeStart = hashRing.GetHashRange(farthestNode.NodeId)?.Start;
+        if (replicationRangeStart == null) return;
+
+        var replicationRangeEnd = unchecked(ownRange.Value.Start - 1);
+
+        var replicaCount = await PullRangeAsync(client, currentNode.NodeId, successor, replicationRangeStart.Value, replicationRangeEnd);
+        _logger.LogInformation(
+            "Onboarding node {NodeId}: received {Count} replicated record(s) from successor {SuccessorId}",
+            currentNode.NodeId, replicaCount, successor.NodeId);
     }
 
-    public async Task MigrateFromLeavingNodeAsync(Guid leavingNodeId)
+    public async Task RebalanceOnNodeJoinAsync(GossipMessage message)
     {
+        if(message.Topic != GossipTopic.NodeStatusChange || message.Payload.NodeStatusChanges == null)  return;
+
+        var newNodeChange = message.Payload.NodeStatusChanges.FirstOrDefault();
+        if (newNodeChange == null) return;
+
         var clusterState = _nodeState.GetClusterState();
-        var leavingNode = clusterState.Nodes.FirstOrDefault(n => n.NodeId == leavingNodeId);
-        if (leavingNode == null) return;
+        var newNode = clusterState.Nodes.FirstOrDefault(n => n.NodeId == newNodeChange.NodeId);
+        if (newNode == null) return;
+
+        if(newNode.Status != NodeStatus.Joining || newNodeChange.NewStatus != NodeStatus.Online) return;
+
+        var hashRing = _nodeState.GetHashRing();
+        var replicationFactor = _nodeState.GetReplicationFactor();
+
+        var totalNodes = hashRing.GetSortedNodes().Count;
+        if (totalNodes <= replicationFactor) return;
+
+        var effectedNodes = new HashSet<Guid>();
+        for(int i = 1; i <= replicationFactor + 1; i++)
+        {
+            var effectedNode = hashRing.GetNodeByOffset(newNode.NodeId, i);
+            if (effectedNode == null || !effectedNodes.Add(effectedNode.NodeId)) break; // wrapped all the way around the ring
+        }
 
         var currentNode = _nodeState.GetCurrentNode();
+        if(!effectedNodes.Contains(currentNode.NodeId)) return;  // Didn't affect this node, nothing to rebalance
 
-        // Determine successor of leaving node
-        var sortedNodes = clusterState.Nodes
-            .Where(n => n.Status != NodeStatus.Failed && n.NodeId != leavingNodeId)
-            .OrderBy(n => n.HashPosition)
-            .ToList();
+        var node = hashRing.GetNodeByOffset(currentNode.NodeId, -(replicationFactor+1));
+        if(node == null) return;
 
-        if (sortedNodes.Count == 0) return;
+        var range = hashRing.GetHashRange(node.NodeId);
+        if (range == null) return;
 
-        // Find successor - first node clockwise after the leaving node
-        var successor = sortedNodes.FirstOrDefault(n => n.HashPosition > leavingNode.HashPosition)
-                        ?? sortedNodes[0];
+        await _repository.DeleteRecordsInHashRangeAsync(range.Value.Start, range.Value.End);
+    }
 
-        if (successor.NodeId != currentNode.NodeId) return;
-
-        _logger.LogInformation("Pulling data from leaving node {NodeId}", leavingNodeId);
-
+    private async Task<int> PullRangeAsync(HttpClient client, Guid requestingNodeId, ClusterNodeInfo successor, ulong rangeStart, ulong rangeEnd)
+    {
         try
         {
-            var client = _httpClientFactory.CreateClient("InternalNode");
-            client.BaseAddress = new Uri(leavingNode.BaseUrl);
-            client.Timeout = TimeSpan.FromSeconds(60);
-
-            // Get predecessor of leaving node to determine range
-            var allSorted = clusterState.Nodes
-                .OrderBy(n => n.HashPosition)
-                .ToList();
-            var leavingIndex = allSorted.FindIndex(n => n.NodeId == leavingNodeId);
-            var predIndex = (leavingIndex - 1 + allSorted.Count) % allSorted.Count;
-
-            ulong rangeStart = allSorted[predIndex].HashPosition + 1;
-            ulong rangeEnd = leavingNode.HashPosition;
-
             var request = new MigrationRequest
             {
-                RequestingNodeId = currentNode.NodeId,
+                RequestingNodeId = requestingNodeId,
                 RangeStart = rangeStart,
                 RangeEnd = rangeEnd
             };
 
             var response = await client.PostAsJsonAsync("/internal/migrate-out", request);
-            if (response.IsSuccessStatusCode)
+            if (!response.IsSuccessStatusCode)
             {
-                var migrationData = await response.Content.ReadFromJsonAsync<MigrationResponse>();
-                if (migrationData?.Records != null)
-                {
-                    await _repository.BulkInsertRecordsAsync(migrationData.Records);
-                    _logger.LogInformation("Received {Count} records from leaving node {NodeId}",
-                        migrationData.Records.Count, leavingNodeId);
-                }
+                _logger.LogWarning(
+                    "Successor {SuccessorId} returned {StatusCode} for range [{Start}, {End}]",
+                    successor.NodeId, response.StatusCode, rangeStart, rangeEnd);
+                return 0;
             }
+
+            var migrationData = await response.Content.ReadFromJsonAsync<MigrationResponse>();
+            if (migrationData?.Records is not { Count: > 0 })
+                return 0;
+
+            await _repository.BulkInsertRecordsAsync(migrationData.Records);
+            return migrationData.Records.Count;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to pull data from leaving node {NodeId}", leavingNodeId);
+            _logger.LogError(ex, "Failed to pull hash range [{Start}, {End}] from successor {SuccessorId}",
+                rangeStart, rangeEnd, successor.NodeId);
+            return 0;
         }
     }
+
 }
