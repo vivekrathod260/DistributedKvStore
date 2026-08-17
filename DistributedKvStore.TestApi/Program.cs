@@ -3,9 +3,13 @@ using DistributedKvStore.Shared.DTOs;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Configure seed nodes from configuration
-var seedNodes = builder.Configuration.GetSection("Cluster:SeedNodes").Get<string[]>()
-    ?? new[] { "http://localhost:5001", "http://localhost:5002", "http://localhost:5003" };
+
+var seedNodes = builder.Configuration.GetSection("Cluster:SeedNodes").Get<string[]>();
+
+if(seedNodes == null || seedNodes.Length == 0)
+{
+    throw new InvalidOperationException("No seed nodes configured. Please specify at least one seed node in the configuration.");
+}
 
 builder.Services.AddHttpClient("DistributedKvStore");
 builder.Services.AddDistributedKvClient(seedNodes);
