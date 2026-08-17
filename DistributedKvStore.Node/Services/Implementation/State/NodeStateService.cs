@@ -19,6 +19,7 @@ public interface INodeStateService
     void SetReplicationFactor(int factor);
     IHashRing GetHashRing();
     bool IsInitialized { get; }
+    DateTime? InitializedAtUtc { get; }
     void MarkInitialized();
 }
 
@@ -32,6 +33,7 @@ public class NodeStateService : INodeStateService
     private bool _isInitialized;
     private readonly IRebalancingService? _rebalancingService;
     private readonly IGossipService? _gossipService;
+    private DateTime? _initializedAtUtc;
     private static readonly TimeSpan FailedThreshold = TimeSpan.FromSeconds(30);
 
     public bool IsInitialized
@@ -40,6 +42,16 @@ public class NodeStateService : INodeStateService
         {
             _lock.EnterReadLock();
             try { return _isInitialized; }
+            finally { _lock.ExitReadLock(); }
+        }
+    }
+
+    public DateTime? InitializedAtUtc
+    {
+        get
+        {
+            _lock.EnterReadLock();
+            try { return _initializedAtUtc; }
             finally { _lock.ExitReadLock(); }
         }
     }
@@ -70,7 +82,12 @@ public class NodeStateService : INodeStateService
     public void MarkInitialized()
     {
         _lock.EnterWriteLock();
-        try { _isInitialized = true; }
+        try
+        {
+            if (_isInitialized) return;
+            _isInitialized = true;
+            _initializedAtUtc = DateTime.UtcNow;
+        }
         finally { _lock.ExitWriteLock(); }
     }
 

@@ -14,6 +14,7 @@ public class HeartbeatService : BackgroundService
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<HeartbeatService> _logger;
     private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan InitializationGracePeriod = TimeSpan.FromSeconds(10);
     private const int ProxyCount = 3;
 
     public HeartbeatService(IServiceProvider serviceProvider, ILogger<HeartbeatService> logger)
@@ -49,6 +50,11 @@ public class HeartbeatService : BackgroundService
         var httpClientFactory = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>();
 
         if (!nodeState.IsInitialized) return;
+
+        // Give the ClusterInit gossip time to propagate and be applied by other nodes before
+        // probing them, so we don't mark freshly-initialized peers as unreachable/suspect.
+        var initializedAt = nodeState.InitializedAtUtc;
+        if (initializedAt == null || DateTime.UtcNow - initializedAt.Value < InitializationGracePeriod) return;
 
         var currentNode = nodeState.GetCurrentNode();
         var clusterState = nodeState.GetClusterState();

@@ -11,4 +11,5 @@ public interface IGossipService
     Task BroadcastNodeJoinAsync(Guid nodeId, string baseUrl);
     Task BroadcastNodeRemovalProposalAsync(Guid offlineNodeId, Guid proposerNodeId);
     Task BroadcastReplicationFactorChangeAsync(int newReplicationFactor);
+    Task BroadcastClusterInitAsync();
 }

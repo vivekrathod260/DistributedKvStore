@@ -94,6 +94,10 @@ public class GossipService : IGossipService
         {
             ApplyNodeJoin(message.Payload.NodeJoin);
         }
+        else if (message.Topic == GossipTopic.ClusterInit)
+        {
+            ApplyClusterInit();
+        }
         else if (message.Topic == GossipTopic.NodeRemovalProposal && message.Payload.NodeRemovalProposal != null)
         {
             ApplyNodeRemovalProposal(message.Payload.NodeRemovalProposal);
@@ -308,6 +312,31 @@ public class GossipService : IGossipService
                 }
             });
         }
+    }
+
+    // ####################### Cluster Init Handling
+    public async Task BroadcastClusterInitAsync()
+    {
+        var currentNode = _nodeState.GetCurrentNode();
+
+        var message = new GossipMessage
+        {
+            MessageId = Guid.NewGuid(),
+            SenderNodeId = currentNode.NodeId,
+            Topic = GossipTopic.ClusterInit,
+            Payload = new GossipPayload(),
+            TimestampUtc = DateTime.UtcNow
+        };
+
+        await BroadcastGossipAsync(message);
+    }
+
+    private void ApplyClusterInit()
+    {
+        if (_nodeState.IsInitialized) return;
+
+        _nodeState.MarkInitialized();
+        _logger.LogInformation("Cluster initialized via gossip");
     }
 
     private async Task<bool> PingNodeAsync(string baseUrl)
