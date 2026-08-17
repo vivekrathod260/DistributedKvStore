@@ -16,6 +16,8 @@ builder.Services.AddDistributedKvClient(seedNodes);
 
 var app = builder.Build();
 
+
+// ########### Key Val CRUD Endpoints ############
 app.MapGet("/key/{key}", async (string key, IDistributedClient client) =>
 {
     var value = await client.GetAsync(key);
@@ -41,6 +43,59 @@ app.MapDelete("/key/{key}", async (string key, IDistributedClient client) =>
 {
     await client.DeleteAsync(key);
     return Results.Ok(new { Message = $"Key '{key}' deleted successfully" });
+});
+
+
+// ########### Cluster Management Endpoints ############
+app.MapGet("/cluster/state", async (IDistributedClient client) =>
+{
+    var state = await client.GetClusterStateAsync();
+    return Results.Ok(state);
+});
+
+app.MapGet("/cluster/state/node", async (string baseUrl, IDistributedClient client) =>
+{
+    var state = await client.GetClusterStateAsync(baseUrl);
+    return Results.Ok(state);
+});
+
+app.MapPost("/cluster/start", async (IDistributedClient client) =>
+{
+    var state = await client.StartClusterAsync();
+    return Results.Ok(state);
+});
+
+app.MapPost("/cluster/shutdown", async (IDistributedClient client) =>
+{
+    await client.ShutdownClusterAsync();
+    return Results.Ok(new { Message = "Cluster shutdown initiated" });
+});
+
+app.MapPost("/cluster/nodes", async (AddNodeRequest request, IDistributedClient client) =>
+{
+    var state = await client.AddNodeAsync(request.BaseUrl, request.NodeId);
+    return Results.Ok(state);
+});
+
+app.MapDelete("/cluster/nodes/{nodeId:guid}", async (Guid nodeId, IDistributedClient client) =>
+{
+    var state = await client.RemoveNodeAsync(nodeId);
+    return Results.Ok(state);
+});
+
+app.MapPost("/cluster/replication-factor", async (SetReplicationFactorRequest request, IDistributedClient client) =>
+{
+    var state = await client.SetReplicationFactorAsync(request.ReplicationFactor);
+    return Results.Ok(state);
+});
+
+app.MapGet("/cluster/health", async (string baseUrl, IDistributedClient client) =>
+{
+    var health = await client.CheckHealthAsync(baseUrl);
+    if (health == null)
+        return Results.Ok(new { BaseUrl = baseUrl, Healthy = false });
+
+    return Results.Ok(new { BaseUrl = baseUrl, Healthy = true, health.NodeId, health.TimestampUtc });
 });
 
 app.Run();
