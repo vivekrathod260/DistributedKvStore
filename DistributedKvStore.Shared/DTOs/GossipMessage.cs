@@ -16,6 +16,8 @@ public class GossipPayload
     public List<NodeStatusChange>? NodeStatusChanges { get; set; } = new();
     public NodeSuspicionInfo? NodeSuspicion { get; set; }
     public NodeJoinInfo? NodeJoin { get; set; }
+    public NodeRemovalProposalInfo? NodeRemovalProposal { get; set; }
+    public ReplicationFactorChangeInfo? ReplicationFactorChange { get; set; }
 }
 
 public class NodeStatusChange
@@ -37,4 +39,15 @@ public class NodeJoinInfo
     public Guid NodeId { get; set; }
     public string BaseUrl { get; set; } = string.Empty;
     public ulong HashPosition { get; set; }
+}
+
+public class NodeRemovalProposalInfo
+{
+    public Guid OfflineNodeId { get; set; }
+    public Guid ProposerNodeId { get; set; }
+}
+
+public class ReplicationFactorChangeInfo
+{
+    public int NewReplicationFactor { get; set; }
 }

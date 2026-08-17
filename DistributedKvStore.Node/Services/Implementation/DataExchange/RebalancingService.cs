@@ -190,6 +190,68 @@ public class RebalancingService : IRebalancingService
         _logger.LogInformation("Fetched {Count} replicated record(s) from Node {NodeId}", replicaCount, targetNode.NodeId);
     }
 
+    // Replication factor change
+    public async Task RebalanceOnReplicationFactorChangeAsync(int currentReplicationFactor, int newReplicationFactor)
+    {
+        if (newReplicationFactor == currentReplicationFactor) return;
+
+        var hashRing = _nodeState.GetHashRing();
+        var currentNode = _nodeState.GetCurrentNode();
+
+        var maxOffset = hashRing.GetSortedNodes().Count - 1;
+        if (maxOffset < 1) return;
+
+        if (newReplicationFactor > currentReplicationFactor)
+        {
+            await FetchAdditionalReplicaRangesAsync(hashRing, currentNode, currentReplicationFactor + 1, Math.Min(newReplicationFactor, maxOffset));
+        }
+        else
+        {
+            await DropSurplusReplicaRangesAsync(hashRing, currentNode, newReplicationFactor + 1, Math.Min(currentReplicationFactor, maxOffset));
+        }
+    }
+
+    // Pull the primary ranges of the predecessors sitting [firstOffset, lastOffset] hops back.
+    private async Task FetchAdditionalReplicaRangesAsync(IHashRing hashRing, ClusterNodeInfo currentNode, int firstOffset, int lastOffset)
+    {
+        for (int offset = firstOffset; offset <= lastOffset; offset++)
+        {
+            var sourceNode = hashRing.GetNodeByOffset(currentNode.NodeId, -offset);
+            if (sourceNode == null || sourceNode.NodeId == currentNode.NodeId) break; // wrapped all the way around the ring
+
+            var range = hashRing.GetHashRange(sourceNode.NodeId);
+            if (range == null) continue;
+
+            var client = _httpClientFactory.CreateClient("InternalNode");
+            client.BaseAddress = new Uri(sourceNode.BaseUrl);
+            client.Timeout = TimeSpan.FromSeconds(60);
+
+            var count = await PullRangeAsync(client, currentNode.NodeId, sourceNode, range.Value.Start, range.Value.End);
+            _logger.LogInformation(
+                "Replication factor increase: node {NodeId} received {Count} replicated record(s) for the range owned by node {SourceNodeId}",
+                currentNode.NodeId, count, sourceNode.NodeId);
+        }
+    }
+
+    // Drop the ranges of the predecessors sitting [firstOffset, lastOffset] hops back
+    private async Task DropSurplusReplicaRangesAsync(IHashRing hashRing, ClusterNodeInfo currentNode, int firstOffset, int lastOffset)
+    {
+        if (firstOffset > lastOffset) return;
+
+        var nearestNode = hashRing.GetNodeByOffset(currentNode.NodeId, -firstOffset);
+        var farthestNode = hashRing.GetNodeByOffset(currentNode.NodeId, -lastOffset);
+        if (nearestNode == null || farthestNode == null) return;
+
+        var nearestRange = hashRing.GetHashRange(nearestNode.NodeId);
+        var farthestRange = hashRing.GetHashRange(farthestNode.NodeId);
+        if (nearestRange == null || farthestRange == null) return;
+
+        await _repository.DeleteRecordsInHashRangeAsync(farthestRange.Value.Start, nearestRange.Value.End);
+
+        _logger.LogInformation("Replication factor decrease: node {NodeId} dropped replica range [{Start}, {End}] covering nodes {FarthestNodeId}..{NearestNodeId}",
+            currentNode.NodeId, farthestRange.Value.Start, nearestRange.Value.End, farthestNode.NodeId, nearestNode.NodeId);
+    }
+
     // copy given range records from the target node
     private async Task<int> PullRangeAsync(HttpClient client, Guid requestingNodeId, ClusterNodeInfo targetDataNode, ulong rangeStart, ulong rangeEnd)
     {

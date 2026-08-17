@@ -9,4 +9,6 @@ public interface IGossipService
     Task BroadcastNodeStatusChangeAsync(List<NodeStatusChange> changes);
     Task BroadcastNodeSuspicionAsync(Guid suspectedNodeId, List<Guid> verifierNodeIds);
     Task BroadcastNodeJoinAsync(Guid nodeId, string baseUrl);
+    Task BroadcastNodeRemovalProposalAsync(Guid offlineNodeId, Guid proposerNodeId);
+    Task BroadcastReplicationFactorChangeAsync(int newReplicationFactor);
 }

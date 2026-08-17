@@ -120,11 +120,23 @@ public class ClusterManagementService : IClusterManagementService
         return _nodeState.GetClusterState();
     }
 
-    public Task SetReplicationFactorAsync(int factor)
+    public async Task SetReplicationFactorAsync(int factor)
     {
+        if (factor < 1)
+            throw new ArgumentOutOfRangeException(nameof(factor), "Replication factor must be at least 1");
+
+        var currentFactor = _nodeState.GetReplicationFactor();
+        if (currentFactor == factor)
+        {
+            _logger.LogInformation("Replication factor is already {Factor}; nothing to rebalance", factor);
+            return;
+        }
+
         _nodeState.SetReplicationFactor(factor);
-        _logger.LogInformation("Replication factor set to {Factor}", factor);
-        return Task.CompletedTask;
+        _logger.LogInformation("Replication factor changed from {OldFactor} to {NewFactor}", currentFactor, factor);
+
+        await _gossipService.BroadcastReplicationFactorChangeAsync(factor);
+        await _rebalancingService.RebalanceOnReplicationFactorChangeAsync(currentFactor, factor);
     }
 
     public async Task ShutdownClusterAsync()

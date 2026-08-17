@@ -1,3 +1,4 @@
+using DistributedKvStore.Node.Services.Interfaces;
 using DistributedKvStore.Shared.Enums;
 using DistributedKvStore.Shared.Hashing;
 using DistributedKvStore.Shared.Models;
@@ -29,6 +30,8 @@ public class NodeStateService : INodeStateService
     private readonly ConsistentHashRing _hashRing;
     private readonly Dictionary<Guid, DateTime> _lastSeenUtc = new();
     private bool _isInitialized;
+    private readonly IRebalancingService? _rebalancingService;
+    private readonly IGossipService? _gossipService;
     private static readonly TimeSpan FailedThreshold = TimeSpan.FromSeconds(30);
 
     public bool IsInitialized
@@ -41,8 +44,10 @@ public class NodeStateService : INodeStateService
         }
     }
 
-    public NodeStateService(Guid nodeId, string baseUrl, ulong hashPosition)
+    public NodeStateService(Guid nodeId, string baseUrl, ulong hashPosition, IRebalancingService? rebalancingService = null, IGossipService? gossipService = null)
     {
+        _rebalancingService = rebalancingService;
+        _gossipService = gossipService;
         _currentNode = new ClusterNodeInfo
         {
             NodeId = nodeId,
@@ -91,25 +96,30 @@ public class NodeStateService : INodeStateService
         finally { _lock.ExitWriteLock(); }
     }
 
-    // Lazily evicts Suspect nodes nobody has confirmed alive for too long.
+    // Lazily proposes removal of Suspect nodes nobody has confirmed alive for too long.
     private void PruneExpiredSuspects()
     {
         var now = DateTime.UtcNow;
         var expired = _clusterState.Nodes
             .Where(n => n.Status == NodeStatus.Suspect && (!_lastSeenUtc.TryGetValue(n.NodeId, out var lastSeen) || now - lastSeen > FailedThreshold))
-            .Select(n => n.NodeId)
             .ToList();
 
         if (expired.Count == 0)
             return;
 
-        foreach (var nodeId in expired)
+        foreach (var offlineNode in expired)
         {
-            _clusterState.Nodes.RemoveAll(n => n.NodeId == nodeId);
-            _lastSeenUtc.Remove(nodeId);
-        }
+            var successor = _hashRing.FindSuccessorNode(offlineNode, _clusterState.Nodes);
+            if (successor?.NodeId == _currentNode.NodeId)
+            {
+                RemoveNode(offlineNode.NodeId);
 
-        _hashRing.BuildRing(_clusterState.Nodes);
+                if (_gossipService != null)
+                {
+                    _ = _gossipService.BroadcastNodeRemovalProposalAsync(offlineNode.NodeId, _currentNode.NodeId);
+                }
+            }
+        }
     }
 
     public ClusterNodeInfo GetCurrentNode()
@@ -191,14 +201,22 @@ public class NodeStateService : INodeStateService
 
     public void RemoveNode(Guid nodeId)
     {
+        ClusterNodeInfo? removedNode = null;
+
         _lock.EnterWriteLock();
         try
         {
+            removedNode = _clusterState.Nodes.FirstOrDefault(n => n.NodeId == nodeId);
             _clusterState.Nodes.RemoveAll(n => n.NodeId == nodeId);
             _hashRing.BuildRing(_clusterState.Nodes);
             _lastSeenUtc.Remove(nodeId);
         }
         finally { _lock.ExitWriteLock(); }
+
+        if (removedNode != null && _rebalancingService != null)
+        {
+            _ = _rebalancingService.RebalanceOnNodeRemovalAsync(removedNode);
+        }
     }
 
     // Keeps the local last-seen tracking dictionary in sync with whatever node IDs are

@@ -148,4 +148,16 @@ public class ConsistentHashRing : IHashRing
             return (Start: unchecked(predecessor.HashPosition + 1), End: node.HashPosition);
         }
     }
+
+    public ClusterNodeInfo? FindSuccessorNode(ClusterNodeInfo node, IEnumerable<ClusterNodeInfo> allNodes)
+    {
+        var sortedNodes = allNodes.OrderBy(n => n.HashPosition).ToList();
+        var nodeIndex = sortedNodes.FindIndex(n => n.NodeId == node.NodeId);
+
+        if (nodeIndex == -1 || sortedNodes.Count == 0)
+            return null;
+
+        var successorIndex = (nodeIndex + 1) % sortedNodes.Count;
+        return sortedNodes[successorIndex];
+    }
 }

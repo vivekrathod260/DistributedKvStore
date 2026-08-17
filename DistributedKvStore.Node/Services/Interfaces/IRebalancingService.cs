@@ -8,4 +8,5 @@ public interface IRebalancingService
     Task OnboardSelfAsync();
     Task ProcessGossipMessageAsync(GossipMessage message);
     Task RebalanceOnNodeRemovalAsync(ClusterNodeInfo offlineNode);
+    Task RebalanceOnReplicationFactorChangeAsync(int currentReplicationFactor, int newReplicationFactor);
 }

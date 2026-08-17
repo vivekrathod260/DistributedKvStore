@@ -56,8 +56,11 @@ public class ClusterController : ControllerBase
     [HttpPost("set-replication-factor")]
     public async Task<IActionResult> SetReplicationFactor([FromBody] SetReplicationFactorRequest request)
     {
+        if (request.ReplicationFactor < 1)
+            return BadRequest("Replication factor must be at least 1");
+
         await _clusterService.SetReplicationFactorAsync(request.ReplicationFactor);
-        return Ok();
+        return Ok(_nodeState.GetClusterState());
     }
 
     [HttpPost("shutdown")]

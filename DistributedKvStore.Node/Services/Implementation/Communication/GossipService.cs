@@ -13,6 +13,7 @@ public class GossipService : IGossipService
 {
     private readonly INodeStateService _nodeState;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<GossipService> _logger;
     private readonly ConcurrentDictionary<Guid, DateTime> _processedMessages = new();
     private static readonly TimeSpan MessageRetention = TimeSpan.FromMinutes(5);
@@ -21,10 +22,12 @@ public class GossipService : IGossipService
     public GossipService(
         INodeStateService nodeState,
         IHttpClientFactory httpClientFactory,
+        IServiceScopeFactory scopeFactory,
         ILogger<GossipService> logger)
     {
         _nodeState = nodeState;
         _httpClientFactory = httpClientFactory;
+        _scopeFactory = scopeFactory;
         _logger = logger;
     }
 
@@ -90,6 +93,14 @@ public class GossipService : IGossipService
         else if (message.Topic == GossipTopic.NodeJoin && message.Payload.NodeJoin != null)
         {
             ApplyNodeJoin(message.Payload.NodeJoin);
+        }
+        else if (message.Topic == GossipTopic.NodeRemovalProposal && message.Payload.NodeRemovalProposal != null)
+        {
+            ApplyNodeRemovalProposal(message.Payload.NodeRemovalProposal);
+        }
+        else if (message.Topic == GossipTopic.ReplicationFactorChange && message.Payload.ReplicationFactorChange != null)
+        {
+            ApplyReplicationFactorChange(message.Payload.ReplicationFactorChange);
         }
 
         // Forward to other nodes
@@ -313,6 +324,91 @@ public class GossipService : IGossipService
         catch
         {
             return false;
+        }
+    }
+
+    public async Task BroadcastNodeRemovalProposalAsync(Guid offlineNodeId, Guid proposerNodeId)
+    {
+        var currentNode = _nodeState.GetCurrentNode();
+
+        var message = new GossipMessage
+        {
+            MessageId = Guid.NewGuid(),
+            SenderNodeId = currentNode.NodeId,
+            Topic = GossipTopic.NodeRemovalProposal,
+            Payload = new GossipPayload
+            {
+                NodeRemovalProposal = new NodeRemovalProposalInfo
+                {
+                    OfflineNodeId = offlineNodeId,
+                    ProposerNodeId = proposerNodeId
+                }
+            },
+            TimestampUtc = DateTime.UtcNow
+        };
+
+        await BroadcastGossipAsync(message);
+    }
+
+    private void ApplyNodeRemovalProposal(NodeRemovalProposalInfo proposal)
+    {
+        _logger.LogWarning("Received node removal proposal for {OfflineNodeId} from proposer {ProposerNodeId}",
+            proposal.OfflineNodeId, proposal.ProposerNodeId);
+        _nodeState.RemoveNode(proposal.OfflineNodeId);
+    }
+
+    public async Task BroadcastReplicationFactorChangeAsync(int newReplicationFactor)
+    {
+        var currentNode = _nodeState.GetCurrentNode();
+
+        var message = new GossipMessage
+        {
+            MessageId = Guid.NewGuid(),
+            SenderNodeId = currentNode.NodeId,
+            Topic = GossipTopic.ReplicationFactorChange,
+            Payload = new GossipPayload
+            {
+                ReplicationFactorChange = new ReplicationFactorChangeInfo
+                {
+                    NewReplicationFactor = newReplicationFactor
+                }
+            },
+            TimestampUtc = DateTime.UtcNow
+        };
+
+        await BroadcastGossipAsync(message);
+    }
+
+    private void ApplyReplicationFactorChange(ReplicationFactorChangeInfo change)
+    {
+        if (change.NewReplicationFactor < 1)
+        {
+            _logger.LogWarning("Ignoring gossiped replication factor {Factor}: must be at least 1", change.NewReplicationFactor);
+            return;
+        }
+
+        var currentFactor = _nodeState.GetReplicationFactor();
+        if (currentFactor == change.NewReplicationFactor)
+            return;
+
+        _nodeState.SetReplicationFactor(change.NewReplicationFactor);
+        _logger.LogInformation("Replication factor changed from {OldFactor} to {NewFactor} via gossip", currentFactor, change.NewReplicationFactor);
+
+        _ = Task.Run(() => RebalanceAfterReplicationFactorChangeAsync(currentFactor, change.NewReplicationFactor));
+    }
+
+    private async Task RebalanceAfterReplicationFactorChangeAsync(int currentFactor, int newFactor)
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var rebalancingService = scope.ServiceProvider.GetRequiredService<IRebalancingService>();
+            await rebalancingService.RebalanceOnReplicationFactorChangeAsync(currentFactor, newFactor);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Rebalancing after replication factor change from {OldFactor} to {NewFactor} failed",
+                currentFactor, newFactor);
         }
     }
 }
