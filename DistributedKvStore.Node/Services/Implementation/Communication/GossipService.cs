@@ -16,8 +16,10 @@ public class GossipService : IGossipService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<GossipService> _logger;
     private readonly ConcurrentDictionary<Guid, DateTime> _processedMessages = new();
+    private readonly ConcurrentDictionary<Guid, int> _forwardCounts = new();
     private static readonly TimeSpan MessageRetention = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan SuspectVerificationWindow = TimeSpan.FromSeconds(15);
+    private const int MaxForwardsPerMessage = 3;
 
     public GossipService(
         INodeStateService nodeState,
@@ -63,52 +65,57 @@ public class GossipService : IGossipService
         }
     }
 
-    public async Task ProcessGossipMessageAsync(GossipMessage message)
+    public Task ProcessGossipMessageAsync(GossipMessage message)
     {
-        // Deduplicate
-        if (_processedMessages.ContainsKey(message.MessageId))
+        if (!_processedMessages.ContainsKey(message.MessageId))
         {
-            _logger.LogDebug("Ignoring duplicate gossip message {MessageId}", message.MessageId);
-            return;
-        }
+            _processedMessages[message.MessageId] = DateTime.UtcNow;
+            CleanupOldMessages();
 
-        _processedMessages[message.MessageId] = DateTime.UtcNow;
-        CleanupOldMessages();
+            // Receiving any gossip message is itself proof the sender is alive right now.
+            _nodeState.TouchLastSeen(message.SenderNodeId);
 
-        // Receiving any gossip message is itself proof the sender is alive right now.
-        _nodeState.TouchLastSeen(message.SenderNodeId);
-
-        if(message.Topic == GossipTopic.NodeStatusChange && message.Payload.NodeStatusChanges != null)
-        {
-            // Apply state changes
-            foreach (var change in message.Payload.NodeStatusChanges!)
+            if(message.Topic == GossipTopic.NodeStatusChange && message.Payload.NodeStatusChanges != null)
             {
-                ApplyNodeStatusChange(change);
+                // Apply state changes
+                foreach (var change in message.Payload.NodeStatusChanges!)
+                {
+                    ApplyNodeStatusChange(change);
+                }
+            }
+            else if (message.Topic == GossipTopic.NodeSuspicion && message.Payload.NodeSuspicion != null)
+            {
+                ApplyNodeSuspicion(message.Payload.NodeSuspicion);
+            }
+            else if (message.Topic == GossipTopic.NodeJoin && message.Payload.NodeJoin != null)
+            {
+                ApplyNodeJoin(message.Payload.NodeJoin);
+            }
+            else if (message.Topic == GossipTopic.ClusterInit)
+            {
+                ApplyClusterInit();
+            }
+            else if (message.Topic == GossipTopic.NodeRemovalProposal && message.Payload.NodeRemovalProposal != null)
+            {
+                ApplyNodeRemovalProposal(message.Payload.NodeRemovalProposal);
+            }
+            else if (message.Topic == GossipTopic.ReplicationFactorChange && message.Payload.ReplicationFactorChange != null)
+            {
+                ApplyReplicationFactorChange(message.Payload.ReplicationFactorChange);
             }
         }
-        else if (message.Topic == GossipTopic.NodeSuspicion && message.Payload.NodeSuspicion != null)
+        else
         {
-            ApplyNodeSuspicion(message.Payload.NodeSuspicion);
-        }
-        else if (message.Topic == GossipTopic.NodeJoin && message.Payload.NodeJoin != null)
-        {
-            ApplyNodeJoin(message.Payload.NodeJoin);
-        }
-        else if (message.Topic == GossipTopic.ClusterInit)
-        {
-            ApplyClusterInit();
-        }
-        else if (message.Topic == GossipTopic.NodeRemovalProposal && message.Payload.NodeRemovalProposal != null)
-        {
-            ApplyNodeRemovalProposal(message.Payload.NodeRemovalProposal);
-        }
-        else if (message.Topic == GossipTopic.ReplicationFactorChange && message.Payload.ReplicationFactorChange != null)
-        {
-            ApplyReplicationFactorChange(message.Payload.ReplicationFactorChange);
+            _logger.LogDebug("Ignoring duplicate gossip message {MessageId}, still eligible to forward", message.MessageId);
         }
 
-        // Forward to other nodes
-        await ForwardGossipAsync(message);
+        var forwardAttempt = _forwardCounts.AddOrUpdate(message.MessageId, 1, (_, count) => count + 1);
+        if (forwardAttempt <= MaxForwardsPerMessage)
+        {
+            _ = ForwardGossipAsync(message);
+        }
+
+        return Task.CompletedTask;
     }
 
     private async Task ForwardGossipAsync(GossipMessage message)
@@ -135,6 +142,7 @@ public class GossipService : IGossipService
         foreach (var id in expired)
         {
             _processedMessages.TryRemove(id, out _);
+            _forwardCounts.TryRemove(id, out _);
         }
     }
 

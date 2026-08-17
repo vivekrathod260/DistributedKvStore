@@ -330,7 +330,7 @@ public class NodeStateService : INodeStateService
             _hashRing.BuildRing(_clusterState.Nodes);
             SyncLastSeenTracking();
             _isInitialized = snapshot.IsInitialized;
-            _initializedAtUtc = snapshot.IsInitialized ? DateTime.UtcNow : null;
+            _initializedAtUtc = DateTime.UtcNow;
         }
         finally { _lock.ExitWriteLock(); }
     }
