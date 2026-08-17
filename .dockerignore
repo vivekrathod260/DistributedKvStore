@@ -1,0 +1,10 @@
+**/bin/
+**/obj/
+**/.vs/
+**/*.db
+**/*.db-shm
+**/*.db-wal
+.git/
+.gitignore
+*.md
+*.http

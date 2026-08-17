@@ -1,0 +1,187 @@
+x-node-build: &node-build
+  context: .
+  dockerfile: DistributedKvStore.Node/Dockerfile
+
+x-node-env: &node-env
+  ASPNETCORE_ENVIRONMENT: Development
+  ASPNETCORE_URLS: http://+:8080
+
+services:
+  node1:
+    build: *node-build
+    environment:
+      <<: *node-env
+      Node__Id: 9e4fa7d8-6a25-4351-9a17-64f3ae8e6ef4
+      Node__BaseUrl: http://node1:8080
+      Node__DbPath: /data/node1.db
+    volumes:
+      - node1-data:/data
+    ports:
+      - "5001:8080"
+    networks: [kvstore]
+
+  node2:
+    build: *node-build
+    environment:
+      <<: *node-env
+      Node__Id: 11cdbc8d-6b87-4dad-9fc1-d550c5659830
+      Node__BaseUrl: http://node2:8080
+      Node__DbPath: /data/node2.db
+    volumes:
+      - node2-data:/data
+    ports:
+      - "5002:8080"
+    networks: [kvstore]
+
+  node3:
+    build: *node-build
+    environment:
+      <<: *node-env
+      Node__Id: e4fbc6fe-87f0-4ac8-810e-fd8deee6ed89
+      Node__BaseUrl: http://node3:8080
+      Node__DbPath: /data/node3.db
+    volumes:
+      - node3-data:/data
+    ports:
+      - "5003:8080"
+    networks: [kvstore]
+
+  node4:
+    build: *node-build
+    environment:
+      <<: *node-env
+      Node__Id: 1f13956d-a64d-4073-9b41-8d5648059e9c
+      Node__BaseUrl: http://node4:8080
+      Node__DbPath: /data/node4.db
+    volumes:
+      - node4-data:/data
+    ports:
+      - "5004:8080"
+    networks: [kvstore]
+
+  node5:
+    build: *node-build
+    environment:
+      <<: *node-env
+      Node__Id: ee820b61-a10d-4ed2-92c6-aebcd97740fb
+      Node__BaseUrl: http://node5:8080
+      Node__DbPath: /data/node5.db
+    volumes:
+      - node5-data:/data
+    ports:
+      - "5005:8080"
+    networks: [kvstore]
+
+  node6:
+    build: *node-build
+    environment:
+      <<: *node-env
+      Node__Id: cc1b33e5-a223-4cea-9fa0-219ba3d9305e
+      Node__BaseUrl: http://node6:8080
+      Node__DbPath: /data/node6.db
+    volumes:
+      - node6-data:/data
+    ports:
+      - "5006:8080"
+    networks: [kvstore]
+
+  node7:
+    build: *node-build
+    environment:
+      <<: *node-env
+      Node__Id: 540187b7-6645-4227-8a02-751976069a03
+      Node__BaseUrl: http://node7:8080
+      Node__DbPath: /data/node7.db
+    volumes:
+      - node7-data:/data
+    ports:
+      - "5007:8080"
+    networks: [kvstore]
+
+  node8:
+    build: *node-build
+    environment:
+      <<: *node-env
+      Node__Id: 9f91de67-a94c-4134-b489-5ff8fb97f9b5
+      Node__BaseUrl: http://node8:8080
+      Node__DbPath: /data/node8.db
+    volumes:
+      - node8-data:/data
+    ports:
+      - "5008:8080"
+    networks: [kvstore]
+
+  node9:
+    build: *node-build
+    environment:
+      <<: *node-env
+      Node__Id: a7bd05e5-4933-47f2-afe9-04081bdfe296
+      Node__BaseUrl: http://node9:8080
+      Node__DbPath: /data/node9.db
+    volumes:
+      - node9-data:/data
+    ports:
+      - "5009:8080"
+    networks: [kvstore]
+
+  node10:
+    build: *node-build
+    environment:
+      <<: *node-env
+      Node__Id: f51336c9-247d-48d8-801f-8134545bcc9c
+      Node__BaseUrl: http://node10:8080
+      Node__DbPath: /data/node10.db
+    volumes:
+      - node10-data:/data
+    ports:
+      - "5010:8080"
+    networks: [kvstore]
+
+  cluster-init:
+    image: curlimages/curl:8.11.0
+    depends_on:
+      - node1
+      - node2
+      - node3
+      - node4
+      - node5
+      - node6
+      - node7
+      - node8
+      - node9
+      - node10
+    volumes:
+      - ./docker/init-cluster.sh:/init-cluster.sh:ro
+    entrypoint: ["/bin/sh", "/init-cluster.sh"]
+    networks: [kvstore]
+
+  testapi:
+    build:
+      context: .
+      dockerfile: DistributedKvStore.TestApi/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      Cluster__SeedNodes__0: http://node1:8080
+      Cluster__SeedNodes__1: http://node2:8080
+      Cluster__SeedNodes__2: http://node3:8080
+    depends_on:
+      - cluster-init
+    ports:
+      - "6000:8080"
+    networks: [kvstore]
+
+networks:
+  kvstore:
+
+volumes:
+  node1-data:
+  node2-data:
+  node3-data:
+  node4-data:
+  node5-data:
+  node6-data:
+  node7-data:
+  node8-data:
+  node9-data:
+  node10-data:

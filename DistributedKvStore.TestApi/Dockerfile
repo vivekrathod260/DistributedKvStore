@@ -1,0 +1,21 @@
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+WORKDIR /src
+
+COPY DistributedKvStore.TestApi/DistributedKvStore.TestApi.csproj DistributedKvStore.TestApi/
+COPY DistributedKvStore.Client/DistributedKvStore.Client.csproj DistributedKvStore.Client/
+COPY DistributedKvStore.Shared/DistributedKvStore.Shared.csproj DistributedKvStore.Shared/
+RUN dotnet restore DistributedKvStore.TestApi/DistributedKvStore.TestApi.csproj
+
+COPY DistributedKvStore.TestApi/ DistributedKvStore.TestApi/
+COPY DistributedKvStore.Client/ DistributedKvStore.Client/
+COPY DistributedKvStore.Shared/ DistributedKvStore.Shared/
+RUN dotnet publish DistributedKvStore.TestApi/DistributedKvStore.TestApi.csproj -c Release -o /app/publish --no-restore
+
+FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS final
+WORKDIR /app
+COPY --from=build /app/publish .
+
+ENV ASPNETCORE_URLS=http://+:8080
+EXPOSE 8080
+
+ENTRYPOINT ["dotnet", "DistributedKvStore.TestApi.dll"]
