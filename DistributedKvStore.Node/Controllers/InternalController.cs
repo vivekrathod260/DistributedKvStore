@@ -1,6 +1,7 @@
 using DistributedKvStore.Node.Data;
 using DistributedKvStore.Node.Services.Implementation.State;
 using DistributedKvStore.Node.Services.Interfaces;
+using DistributedKvStore.Shared.Enums;
 using DistributedKvStore.Shared.DTOs;
 using DistributedKvStore.Shared.Models;
 using Microsoft.AspNetCore.Mvc;
@@ -78,10 +79,26 @@ public class InternalController : ControllerBase
     }
 
     [HttpPost("cluster-state")]
-    public IActionResult SetClusterState([FromBody] ClusterState state)
+    public async Task<IActionResult> SetClusterState([FromBody] ClusterState state)
     {
         _nodeState.UpdateClusterState(state);
-        _rebalancingService.OnboardSelfAsync();
+
+        await _rebalancingService.OnboardSelfAsync();
+
+        var currentNode = _nodeState.GetCurrentNode();
+        _nodeState.UpdateNodeStatus(currentNode.NodeId, NodeStatus.Online);
+
+        await _gossipService.BroadcastNodeStatusChangeAsync(new List<NodeStatusChange>
+        {
+            new()
+            {
+                NodeId = currentNode.NodeId,
+                NewStatus = NodeStatus.Online,
+                BaseUrl = currentNode.BaseUrl,
+                HashPosition = currentNode.HashPosition
+            }
+        });
+
         return Ok();
     }
 
