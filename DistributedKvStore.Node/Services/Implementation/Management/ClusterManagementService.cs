@@ -31,11 +31,15 @@ public class ClusterManagementService : IClusterManagementService
         _logger = logger;
     }
 
-    public Task<ClusterState> StartClusterAsync()
+    public async Task<ClusterState> StartClusterAsync()
     {
         _nodeState.MarkInitialized();
         _logger.LogInformation("Cluster started with node {NodeId}", _nodeState.GetCurrentNode().NodeId);
-        return Task.FromResult(_nodeState.GetClusterState());
+
+        // Gossip cluster initialization so other nodes also mark themselves initialized.
+        await _gossipService.BroadcastClusterInitAsync();
+
+        return _nodeState.GetClusterState();
     }
 
     public async Task<ClusterState> AddNodeAsync(string baseUrl, Guid? nodeId = null)

@@ -6,5 +6,6 @@ public enum GossipTopic
     NodeSuspicion = 1,
     NodeJoin = 2,
     NodeRemovalProposal = 3,
-    ReplicationFactorChange = 4
+    ReplicationFactorChange = 4,
+    ClusterInit = 5
 }
