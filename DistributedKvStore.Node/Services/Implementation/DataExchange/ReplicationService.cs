@@ -43,6 +43,12 @@ public class ReplicationService : IReplicationService
                 .Where(r => r.NodeId != currentNode.NodeId)
                 .ToList();
 
+            if(targetReplicas.Count == 0)
+            {
+                _logger.LogDebug("Replication skipped, No other replicas found for key {Key}.", key);
+                return;
+            }
+
             var request = new ReplicationRequest
             {
                 Key = key,
@@ -81,7 +87,7 @@ public class ReplicationService : IReplicationService
         }
     }
 
-    public async Task ReplicateToNodesAsync(ReplicationRequest request, List<ClusterNodeInfo> targetNodes)
+    private async Task ReplicateToNodesAsync(ReplicationRequest request, List<ClusterNodeInfo> targetNodes)
     {
         var tasks = targetNodes.Select(node => ReplicateToNodeAsync(request, node));
         await Task.WhenAll(tasks);
