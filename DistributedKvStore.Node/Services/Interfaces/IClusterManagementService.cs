@@ -11,5 +11,6 @@ public interface IClusterManagementService
     Task<ClusterState> RestartNodeAsync(Guid nodeId);
     Task SetReplicationFactorAsync(int factor);
     Task ShutdownClusterAsync();
+    Task ShutdownLocalNodeAsync();
     Task<ClusterState> GetClusterStateAsync();
 }

@@ -17,6 +17,7 @@ public class InternalController : ControllerBase
     private readonly IDataRepository _repository;
     private readonly IRebalancingService _rebalancingService;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly IClusterManagementService _clusterService;
     private readonly ILogger<InternalController> _logger;
 
     public InternalController(
@@ -26,6 +27,7 @@ public class InternalController : ControllerBase
         IDataRepository repository,
         IRebalancingService rebalancingService,
         IHttpClientFactory httpClientFactory,
+        IClusterManagementService clusterService,
         ILogger<InternalController> logger)
     {
         _replicationService = replicationService;
@@ -34,6 +36,7 @@ public class InternalController : ControllerBase
         _repository = repository;
         _rebalancingService = rebalancingService;
         _httpClientFactory = httpClientFactory;
+        _clusterService = clusterService;
         _logger = logger;
     }
 
@@ -79,6 +82,13 @@ public class InternalController : ControllerBase
     {
         _nodeState.UpdateClusterState(state);
         _rebalancingService.OnboardSelfAsync();
+        return Ok();
+    }
+
+    [HttpPost("shutdown")]
+    public async Task<IActionResult> Shutdown()
+    {
+        await _clusterService.ShutdownLocalNodeAsync();
         return Ok();
     }
 

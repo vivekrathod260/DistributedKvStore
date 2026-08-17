@@ -1,3 +1,4 @@
+using DistributedKvStore.Node.Persistence;
 using DistributedKvStore.Node.Services.Interfaces;
 using DistributedKvStore.Shared.Enums;
 using DistributedKvStore.Shared.Hashing;
@@ -21,6 +22,8 @@ public interface INodeStateService
     bool IsInitialized { get; }
     DateTime? InitializedAtUtc { get; }
     void MarkInitialized();
+    ClusterSnapshot GetSnapshot();
+    void RestoreFromSnapshot(ClusterSnapshot snapshot);
 }
 
 public class NodeStateService : INodeStateService
@@ -70,7 +73,7 @@ public class NodeStateService : INodeStateService
 
         _clusterState = new ClusterState
         {
-            ReplicationFactor = 3,
+            ReplicationFactor = 0,
             Nodes = new List<ClusterNodeInfo> { _currentNode }
         };
 
@@ -290,5 +293,45 @@ public class NodeStateService : INodeStateService
     public IHashRing GetHashRing()
     {
         return _hashRing;
+    }
+
+    public ClusterSnapshot GetSnapshot()
+    {
+        _lock.EnterReadLock();
+        try
+        {
+            return new ClusterSnapshot
+            {
+                State = new ClusterState
+                {
+                    ReplicationFactor = _clusterState.ReplicationFactor,
+                    Nodes = _clusterState.Nodes.Select(n => new ClusterNodeInfo
+                    {
+                        NodeId = n.NodeId,
+                        BaseUrl = n.BaseUrl,
+                        HashPosition = n.HashPosition,
+                        Status = n.Status
+                    }).ToList()
+                },
+                IsInitialized = _isInitialized,
+                InitializedAtUtc = _initializedAtUtc
+            };
+        }
+        finally { _lock.ExitReadLock(); }
+    }
+
+    // Restores a previously saved snapshot
+    public void RestoreFromSnapshot(ClusterSnapshot snapshot)
+    {
+        _lock.EnterWriteLock();
+        try
+        {
+            _clusterState = snapshot.State;
+            _hashRing.BuildRing(_clusterState.Nodes);
+            SyncLastSeenTracking();
+            _isInitialized = snapshot.IsInitialized;
+            _initializedAtUtc = snapshot.IsInitialized ? DateTime.UtcNow : null;
+        }
+        finally { _lock.ExitWriteLock(); }
     }
 }

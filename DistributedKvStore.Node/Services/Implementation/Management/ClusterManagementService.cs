@@ -1,10 +1,12 @@
 using System.Net.Http.Json;
+using DistributedKvStore.Node.Persistence;
 using DistributedKvStore.Node.Services.Implementation.State;
 using DistributedKvStore.Node.Services.Interfaces;
 using DistributedKvStore.Shared.DTOs;
 using DistributedKvStore.Shared.Enums;
 using DistributedKvStore.Shared.Hashing;
 using DistributedKvStore.Shared.Models;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace DistributedKvStore.Node.Services.Implementation.Management;
@@ -15,6 +17,8 @@ public class ClusterManagementService : IClusterManagementService
     private readonly IGossipService _gossipService;
     private readonly IRebalancingService _rebalancingService;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly IClusterMetadataStore _metadataStore;
+    private readonly IHostApplicationLifetime _appLifetime;
     private readonly ILogger<ClusterManagementService> _logger;
 
     public ClusterManagementService(
@@ -22,12 +26,16 @@ public class ClusterManagementService : IClusterManagementService
         IGossipService gossipService,
         IRebalancingService rebalancingService,
         IHttpClientFactory httpClientFactory,
+        IClusterMetadataStore metadataStore,
+        IHostApplicationLifetime appLifetime,
         ILogger<ClusterManagementService> logger)
     {
         _nodeState = nodeState;
         _gossipService = gossipService;
         _rebalancingService = rebalancingService;
         _httpClientFactory = httpClientFactory;
+        _metadataStore = metadataStore;
+        _appLifetime = appLifetime;
         _logger = logger;
     }
 
@@ -150,7 +158,7 @@ public class ClusterManagementService : IClusterManagementService
         var clusterState = _nodeState.GetClusterState();
         var currentNode = _nodeState.GetCurrentNode();
 
-        // Notify all peers
+        // Tell every other node to shut itself down.
         foreach (var peer in clusterState.Nodes.Where(n => n.NodeId != currentNode.NodeId))
         {
             try
@@ -158,13 +166,28 @@ public class ClusterManagementService : IClusterManagementService
                 var client = _httpClientFactory.CreateClient("InternalNode");
                 client.BaseAddress = new Uri(peer.BaseUrl);
                 client.Timeout = TimeSpan.FromSeconds(5);
-                await client.PostAsync("/api/cluster/shutdown", null);
+                await client.PostAsync("/internal/shutdown", null);
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to notify node {NodeId} about shutdown", peer.NodeId);
             }
         }
+
+        await ShutdownLocalNodeAsync();
+    }
+
+    public async Task ShutdownLocalNodeAsync()
+    {
+        await _metadataStore.SaveAsync(_nodeState.GetSnapshot());
+        _logger.LogInformation("Cluster state snapshot saved; stopping node");
+
+        // Delay so the HTTP response for this call can flush before the host stops.
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(200));
+            _appLifetime.StopApplication();
+        });
     }
 
     public Task<ClusterState> GetClusterStateAsync()

@@ -37,3 +37,6 @@ msbuild.wrn
 *.db
 *.db-wal
 *.db-shm
+
+# Persisted cluster metadata snapshot (per-node, written on graceful shutdown)
+*.cluster.json

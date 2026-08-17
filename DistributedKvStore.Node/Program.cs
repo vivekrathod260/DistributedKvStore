@@ -1,5 +1,6 @@
 using DistributedKvStore.Node.BackgroundServices;
 using DistributedKvStore.Node.Data;
+using DistributedKvStore.Node.Persistence;
 using DistributedKvStore.Node.Services.Implementation.Business;
 using DistributedKvStore.Node.Services.Implementation.Communication;
 using DistributedKvStore.Node.Services.Implementation.DataExchange;
@@ -19,13 +20,23 @@ var baseUrl = builder.Configuration["Node:BaseUrl"] ?? "http://localhost:5000";
 var hashRing = new ConsistentHashRing();
 var hashPosition = hashRing.ComputeHash(baseUrl);
 
-// Register NodeStateService as singleton
-var nodeStateService = new NodeStateService(nodeId, baseUrl, hashPosition);
-builder.Services.AddSingleton<INodeStateService>(nodeStateService);
-
 // Database
 var dbPath = builder.Configuration["Node:DbPath"] ?? $"node_{nodeId:N}.db";
 builder.Services.AddDbContextFactory<NodeDbContext>(options => options.UseSqlite($"Data Source={dbPath}"));
+
+// Cluster metadata (membership/replication-factor/init snapshot survives a graceful shutdown)
+var clusterStatePath = builder.Configuration["Node:ClusterStatePath"] ?? Path.ChangeExtension(dbPath, ".cluster.json");
+var clusterMetadataStore = new ClusterMetadataStore(clusterStatePath);
+builder.Services.AddSingleton<IClusterMetadataStore>(clusterMetadataStore);
+
+// Register NodeStateService as singleton, restoring a prior snapshot if one was left by a graceful shutdown
+var nodeStateService = new NodeStateService(nodeId, baseUrl, hashPosition);
+var savedSnapshot = await clusterMetadataStore.LoadAsync();
+if (savedSnapshot != null)
+{
+    nodeStateService.RestoreFromSnapshot(savedSnapshot);
+}
+builder.Services.AddSingleton<INodeStateService>(nodeStateService);
 
 // Repositories
 builder.Services.AddScoped<IDataRepository, SqliteDataRepository>();
