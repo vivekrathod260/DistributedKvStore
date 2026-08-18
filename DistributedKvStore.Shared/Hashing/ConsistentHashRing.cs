@@ -71,7 +71,7 @@ public class ConsistentHashRing : IHashRing
             var primaryIndex = _sortedNodes.IndexOf(primary);
             var replicas = new List<ClusterNodeInfo>();
 
-            var replicaCount = Math.Min(replicationFactor - 1, _sortedNodes.Count - 1);
+            var replicaCount = Math.Min(replicationFactor, _sortedNodes.Count - 1);
             for (int i = 1; i <= replicaCount; i++)
             {
                 var idx = (primaryIndex + i) % _sortedNodes.Count;
