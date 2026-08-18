@@ -34,15 +34,16 @@ public class RebalancingService : IRebalancingService
         var currentNode = _nodeState.GetCurrentNode();
         var hashRing = _nodeState.GetHashRing();
         var replicationFactor = _nodeState.GetReplicationFactor();
+        var sortedNodes = hashRing.GetSortedNodes();
 
-        var successor = hashRing.GetNodeByOffset(currentNode.NodeId, 1);
+        var successor = HashRingMath.GetNodeByOffset(sortedNodes, currentNode.NodeId, 1);
         if (successor == null || successor.NodeId == currentNode.NodeId)
         {
             _logger.LogInformation("Node {NodeId} has no peers to onboard from", currentNode.NodeId);
             return;
         }
 
-        var ownRange = hashRing.GetHashRange(currentNode.NodeId);
+        var ownRange = HashRingMath.GetHashRange(sortedNodes, currentNode.NodeId);
         if (ownRange == null)
         {
             _logger.LogWarning("Node {NodeId} is not present in the hash ring; cannot onboard", currentNode.NodeId);
@@ -65,7 +66,7 @@ public class RebalancingService : IRebalancingService
         var seenNodeIds = new HashSet<Guid> { currentNode.NodeId };
         for (int i = 1; i <= replicationFactor; i++)
         {
-            var precedingNode = hashRing.GetNodeByOffset(currentNode.NodeId, -i);
+            var precedingNode = HashRingMath.GetNodeByOffset(sortedNodes, currentNode.NodeId, -i);
             if (precedingNode == null || !seenNodeIds.Add(precedingNode.NodeId))
                 break; // wrapped all the way around the ring
 
@@ -75,7 +76,7 @@ public class RebalancingService : IRebalancingService
         if (farthestNode.NodeId == currentNode.NodeId)
             return; // no preceding nodes to replicate
 
-        var replicationRangeStart = hashRing.GetHashRange(farthestNode.NodeId)?.Start;
+        var replicationRangeStart = HashRingMath.GetHashRange(sortedNodes, farthestNode.NodeId)?.Start;
         if (replicationRangeStart == null) return;
 
         var replicationRangeEnd = unchecked(ownRange.Value.Start - 1);
@@ -109,24 +110,25 @@ public class RebalancingService : IRebalancingService
 
         var hashRing = _nodeState.GetHashRing();
         var replicationFactor = _nodeState.GetReplicationFactor();
+        var sortedNodes = hashRing.GetSortedNodes();
 
-        var totalNodes = hashRing.GetSortedNodes().Count;
+        var totalNodes = sortedNodes.Count;
         if (totalNodes <= replicationFactor) return;
 
         var effectedNodes = new HashSet<Guid>();
         for(int i = 1; i <= replicationFactor + 1; i++)
         {
-            var effectedNode = hashRing.GetNodeByOffset(newNode.NodeId, i);
+            var effectedNode = HashRingMath.GetNodeByOffset(sortedNodes, newNode.NodeId, i);
             if (effectedNode == null || !effectedNodes.Add(effectedNode.NodeId)) break; // wrapped all the way around the ring
         }
 
         var currentNode = _nodeState.GetCurrentNode();
         if(!effectedNodes.Contains(currentNode.NodeId)) return;  // Didn't affect this node, nothing to rebalance
 
-        var node = hashRing.GetNodeByOffset(currentNode.NodeId, -(replicationFactor+1));
+        var node = HashRingMath.GetNodeByOffset(sortedNodes, currentNode.NodeId, -(replicationFactor+1));
         if(node == null) return;
 
-        var range = hashRing.GetHashRange(node.NodeId);
+        var range = HashRingMath.GetHashRange(sortedNodes, node.NodeId);
         if (range == null) return;
 
         await _repository.DeleteRecordsInHashRangeAsync(range.Value.Start, range.Value.End);
@@ -150,16 +152,21 @@ public class RebalancingService : IRebalancingService
     // Rebalance data when given node goes offline
     public async Task RebalanceOnNodeRemovalAsync(ClusterNodeInfo offlineNode)
     {
-        var hashRing = _nodeState.GetHashRing();
         var replicationFactor = _nodeState.GetReplicationFactor();
 
-        var totalNodes = hashRing.GetSortedNodes().Count;
+        var clusterState = _nodeState.GetClusterState();
+        var sortedNodes = clusterState.Nodes
+            .Where(n => n.Status == NodeStatus.Online || n.Status == NodeStatus.Joining || n.NodeId == offlineNode.NodeId)
+            .OrderBy(n => n.HashPosition)
+            .ToList();
+
+        var totalNodes = sortedNodes.Count;
         if (totalNodes <= replicationFactor) return;
 
         var effectedNodes = new HashSet<Guid>();
         for(int i = 1; i <= replicationFactor + 1; i++)
         {
-            var effectedNode = hashRing.GetNodeByOffset(offlineNode.NodeId, i);
+            var effectedNode = HashRingMath.GetNodeByOffset(sortedNodes, offlineNode.NodeId, i);
             if (effectedNode == null || !effectedNodes.Add(effectedNode.NodeId)) break;
         }
 
@@ -169,15 +176,15 @@ public class RebalancingService : IRebalancingService
         ClusterNodeInfo? targetNode;
         (ulong Start, ulong End)? reqRange;
 
-        if(hashRing.GetNodeByOffset(currentNode.NodeId, -(replicationFactor+1))?.NodeId == offlineNode.NodeId)
+        if(HashRingMath.GetNodeByOffset(sortedNodes, currentNode.NodeId, -(replicationFactor+1))?.NodeId == offlineNode.NodeId)
         {
-            targetNode = hashRing.GetNodeByOffset(currentNode.NodeId, -replicationFactor);
-            reqRange = hashRing.GetHashRange(hashRing.GetNodeByOffset(currentNode.NodeId, -(replicationFactor+1))?.NodeId ?? Guid.Empty);
+            targetNode = HashRingMath.GetNodeByOffset(sortedNodes, currentNode.NodeId, -replicationFactor);
+            reqRange = HashRingMath.GetHashRange(sortedNodes, HashRingMath.GetNodeByOffset(sortedNodes, currentNode.NodeId, -(replicationFactor+1))?.NodeId ?? Guid.Empty);
         }
         else
         {
-            targetNode = hashRing.GetNodeByOffset(currentNode.NodeId, -(replicationFactor+1));
-            reqRange = hashRing.GetHashRange(targetNode?.NodeId ?? Guid.Empty);
+            targetNode = HashRingMath.GetNodeByOffset(sortedNodes, currentNode.NodeId, -(replicationFactor+1));
+            reqRange = HashRingMath.GetHashRange(sortedNodes, targetNode?.NodeId ?? Guid.Empty);
         }
 
         if(targetNode == null || reqRange == null) return;
@@ -197,29 +204,30 @@ public class RebalancingService : IRebalancingService
 
         var hashRing = _nodeState.GetHashRing();
         var currentNode = _nodeState.GetCurrentNode();
+        var sortedNodes = hashRing.GetSortedNodes();
 
-        var maxOffset = hashRing.GetSortedNodes().Count - 1;
+        var maxOffset = sortedNodes.Count - 1;
         if (maxOffset < 1) return;
 
         if (newReplicationFactor > currentReplicationFactor)
         {
-            await FetchAdditionalReplicaRangesAsync(hashRing, currentNode, currentReplicationFactor + 1, Math.Min(newReplicationFactor, maxOffset));
+            await FetchAdditionalReplicaRangesAsync(sortedNodes, currentNode, currentReplicationFactor + 1, Math.Min(newReplicationFactor, maxOffset));
         }
         else
         {
-            await DropSurplusReplicaRangesAsync(hashRing, currentNode, newReplicationFactor + 1, Math.Min(currentReplicationFactor, maxOffset));
+            await DropSurplusReplicaRangesAsync(sortedNodes, currentNode, newReplicationFactor + 1, Math.Min(currentReplicationFactor, maxOffset));
         }
     }
 
     // Pull the primary ranges of the predecessors sitting [firstOffset, lastOffset] hops back.
-    private async Task FetchAdditionalReplicaRangesAsync(IHashRing hashRing, ClusterNodeInfo currentNode, int firstOffset, int lastOffset)
+    private async Task FetchAdditionalReplicaRangesAsync(List<ClusterNodeInfo> sortedNodes, ClusterNodeInfo currentNode, int firstOffset, int lastOffset)
     {
         for (int offset = firstOffset; offset <= lastOffset; offset++)
         {
-            var sourceNode = hashRing.GetNodeByOffset(currentNode.NodeId, -offset);
+            var sourceNode = HashRingMath.GetNodeByOffset(sortedNodes, currentNode.NodeId, -offset);
             if (sourceNode == null || sourceNode.NodeId == currentNode.NodeId) break; // wrapped all the way around the ring
 
-            var range = hashRing.GetHashRange(sourceNode.NodeId);
+            var range = HashRingMath.GetHashRange(sortedNodes, sourceNode.NodeId);
             if (range == null) continue;
 
             var client = _httpClientFactory.CreateClient("InternalNode");
@@ -234,16 +242,16 @@ public class RebalancingService : IRebalancingService
     }
 
     // Drop the ranges of the predecessors sitting [firstOffset, lastOffset] hops back
-    private async Task DropSurplusReplicaRangesAsync(IHashRing hashRing, ClusterNodeInfo currentNode, int firstOffset, int lastOffset)
+    private async Task DropSurplusReplicaRangesAsync(List<ClusterNodeInfo> sortedNodes, ClusterNodeInfo currentNode, int firstOffset, int lastOffset)
     {
         if (firstOffset > lastOffset) return;
 
-        var nearestNode = hashRing.GetNodeByOffset(currentNode.NodeId, -firstOffset);
-        var farthestNode = hashRing.GetNodeByOffset(currentNode.NodeId, -lastOffset);
+        var nearestNode = HashRingMath.GetNodeByOffset(sortedNodes, currentNode.NodeId, -firstOffset);
+        var farthestNode = HashRingMath.GetNodeByOffset(sortedNodes, currentNode.NodeId, -lastOffset);
         if (nearestNode == null || farthestNode == null) return;
 
-        var nearestRange = hashRing.GetHashRange(nearestNode.NodeId);
-        var farthestRange = hashRing.GetHashRange(farthestNode.NodeId);
+        var nearestRange = HashRingMath.GetHashRange(sortedNodes, nearestNode.NodeId);
+        var farthestRange = HashRingMath.GetHashRange(sortedNodes, farthestNode.NodeId);
         if (nearestRange == null || farthestRange == null) return;
 
         await _repository.DeleteRecordsInHashRangeAsync(farthestRange.Value.Start, nearestRange.Value.End);
