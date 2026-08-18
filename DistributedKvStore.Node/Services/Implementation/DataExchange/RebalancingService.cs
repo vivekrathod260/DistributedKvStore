@@ -142,7 +142,7 @@ public class RebalancingService : IRebalancingService
 
         var clusterState = _nodeState.GetClusterState();
         var offlineNode = clusterState.Nodes.FirstOrDefault(n => n.NodeId == nodeChange.NodeId);
-        if (offlineNode == null || offlineNode.Status != NodeStatus.Online) return;
+        if (offlineNode == null || new[] { NodeStatus.Online, NodeStatus.Suspect, NodeStatus.Failed }.Contains(offlineNode.Status) == false) return;
 
         await RebalanceOnNodeRemovalAsync(offlineNode);
     }

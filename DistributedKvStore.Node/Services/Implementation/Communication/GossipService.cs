@@ -14,6 +14,7 @@ public class GossipService : IGossipService
     private readonly INodeStateService _nodeState;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IRebalancingService _rebalancingService;
     private readonly ILogger<GossipService> _logger;
     private readonly ConcurrentDictionary<Guid, DateTime> _processedMessages = new();
     private readonly ConcurrentDictionary<Guid, int> _forwardCounts = new();
@@ -25,11 +26,13 @@ public class GossipService : IGossipService
         INodeStateService nodeState,
         IHttpClientFactory httpClientFactory,
         IServiceScopeFactory scopeFactory,
+        IRebalancingService rebalancingService,
         ILogger<GossipService> logger)
     {
         _nodeState = nodeState;
         _httpClientFactory = httpClientFactory;
         _scopeFactory = scopeFactory;
+        _rebalancingService = rebalancingService;
         _logger = logger;
     }
 
@@ -81,6 +84,7 @@ public class GossipService : IGossipService
                 foreach (var change in message.Payload.NodeStatusChanges!)
                 {
                     ApplyNodeStatusChange(change);
+                    _rebalancingService.ProcessGossipMessageAsync(message);
                 }
             }
             else if (message.Topic == GossipTopic.NodeSuspicion && message.Payload.NodeSuspicion != null)
