@@ -83,6 +83,10 @@ public class GossipService : IGossipService
             {
                 ApplyClusterInit();
             }
+            else if (message.Topic == GossipTopic.ClusterUninit)
+            {
+                ApplyClusterUninit();
+            }
             else if (message.Topic == GossipTopic.ReplicationFactorChange && message.Payload.ReplicationFactorChange != null)
             {
                 ApplyReplicationFactorChange(message.Payload.ReplicationFactorChange);
@@ -397,6 +401,31 @@ public class GossipService : IGossipService
 
         _nodeState.MarkInitialized();
         _logger.LogInformation("Cluster initialized via gossip");
+    }
+
+    // ####################### Cluster Uninit Handling
+    public async Task BroadcastClusterUninitAsync()
+    {
+        var currentNode = _nodeState.GetCurrentNode();
+
+        var message = new GossipMessage
+        {
+            MessageId = Guid.NewGuid(),
+            SenderNodeId = currentNode.NodeId,
+            Topic = GossipTopic.ClusterUninit,
+            Payload = new GossipPayload(),
+            TimestampUtc = DateTime.UtcNow
+        };
+
+        await BroadcastGossipAsync(message);
+    }
+
+    private void ApplyClusterUninit()
+    {
+        if (!_nodeState.IsInitialized) return;
+
+        _nodeState.MarkUninitialized();
+        _logger.LogInformation("Cluster uninitialized via gossip");
     }
 
     // ####################### Replication Factor Change Handling

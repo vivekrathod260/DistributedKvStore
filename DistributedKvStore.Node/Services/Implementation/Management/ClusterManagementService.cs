@@ -50,6 +50,16 @@ public class ClusterManagementService : IClusterManagementService
         return _nodeState.GetClusterState();
     }
 
+    public async Task<ClusterState> UninitializeClusterAsync()
+    {
+        _nodeState.MarkUninitialized();
+        _logger.LogInformation("Cluster uninitialized by node {NodeId}", _nodeState.GetCurrentNode().NodeId);
+
+        await _gossipService.BroadcastClusterUninitAsync();
+
+        return _nodeState.GetClusterState();
+    }
+
     public async Task<ClusterState> AddNodeAsync(string baseUrl, Guid? nodeId = null)
     {
         var hashRing = new ConsistentHashRing();

@@ -22,6 +22,7 @@ public interface INodeStateService
     bool IsInitialized { get; }
     DateTime? InitializedAtUtc { get; }
     void MarkInitialized();
+    void MarkUninitialized();
     ClusterSnapshot GetSnapshot();
     void RestoreFromSnapshot(ClusterSnapshot snapshot);
 }
@@ -90,6 +91,18 @@ public class NodeStateService : INodeStateService
             if (_isInitialized) return;
             _isInitialized = true;
             _initializedAtUtc = DateTime.UtcNow;
+        }
+        finally { _lock.ExitWriteLock(); }
+    }
+
+    public void MarkUninitialized()
+    {
+        _lock.EnterWriteLock();
+        try
+        {
+            if (!_isInitialized) return;
+            _isInitialized = false;
+            _initializedAtUtc = null;
         }
         finally { _lock.ExitWriteLock(); }
     }

@@ -32,6 +32,13 @@ public class ClusterController : ControllerBase
         return Ok(state);
     }
 
+    [HttpPost("uninitialize")]
+    public async Task<IActionResult> Uninitialize()
+    {
+        var state = await _clusterService.UninitializeClusterAsync();
+        return Ok(state);
+    }
+
     [HttpPost("add-node")]
     public async Task<IActionResult> AddNode([FromBody] AddNodeRequest request)
     {
