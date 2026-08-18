@@ -113,7 +113,7 @@ public class RebalancingService : IRebalancingService
         var sortedNodes = hashRing.GetSortedNodes();
 
         var totalNodes = sortedNodes.Count;
-        if (totalNodes <= replicationFactor) return;
+        if (totalNodes <= replicationFactor + 1) return;
 
         var effectedNodes = new HashSet<Guid>();
         for(int i = 1; i <= replicationFactor + 1; i++)
