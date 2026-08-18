@@ -1,5 +1,4 @@
 using DistributedKvStore.Node.Persistence;
-using DistributedKvStore.Node.Services.Interfaces;
 using DistributedKvStore.Shared.Enums;
 using DistributedKvStore.Shared.Hashing;
 using DistributedKvStore.Shared.Models;
@@ -13,7 +12,8 @@ public interface INodeStateService
     void UpdateClusterState(ClusterState state);
     void UpdateNodeStatus(Guid nodeId, NodeStatus status);
     void AddNode(ClusterNodeInfo node);
-    Task RemoveNode(Guid nodeId);
+    void RemoveNode(Guid nodeId);
+    IReadOnlyList<ClusterNodeInfo> GetExpiredSuspectsOwnedByCurrNode();
     void TouchLastSeen(Guid nodeId);
     DateTime? GetLastSeenUtc(Guid nodeId);
     int GetReplicationFactor();
@@ -35,8 +35,6 @@ public class NodeStateService : INodeStateService
     private readonly ConsistentHashRing _hashRing;
     private readonly Dictionary<Guid, DateTime> _lastSeenUtc = new();
     private bool _isInitialized;
-    private readonly IRebalancingService? _rebalancingService;
-    private readonly IGossipService? _gossipService;
     private DateTime? _initializedAtUtc;
     private static readonly TimeSpan FailedThreshold = TimeSpan.FromSeconds(30);
 
@@ -60,10 +58,8 @@ public class NodeStateService : INodeStateService
         }
     }
 
-    public NodeStateService(Guid nodeId, string baseUrl, ulong hashPosition, IRebalancingService? rebalancingService = null, IGossipService? gossipService = null)
+    public NodeStateService(Guid nodeId, string baseUrl, ulong hashPosition)
     {
-        _rebalancingService = rebalancingService;
-        _gossipService = gossipService;
         _currentNode = new ClusterNodeInfo
         {
             NodeId = nodeId,
@@ -109,11 +105,9 @@ public class NodeStateService : INodeStateService
 
     public ClusterState GetClusterState()
     {
-        _lock.EnterWriteLock();
+        _lock.EnterReadLock();
         try
         {
-            PruneExpiredSuspects();
-
             return new ClusterState
             {
                 ReplicationFactor = _clusterState.ReplicationFactor,
@@ -128,36 +122,31 @@ public class NodeStateService : INodeStateService
                 InitializedAtUtc = _initializedAtUtc
             };
         }
-        finally { _lock.ExitWriteLock(); }
+        finally { _lock.ExitReadLock(); }
     }
 
-    // Lazily proposes removal of Suspect nodes nobody has confirmed alive for too long.
-    private void PruneExpiredSuspects()
+    public IReadOnlyList<ClusterNodeInfo> GetExpiredSuspectsOwnedByCurrNode()
     {
-        var now = DateTime.UtcNow;
-        var expired = _clusterState.Nodes
-            .Where(n => n.Status == NodeStatus.Suspect && (!_lastSeenUtc.TryGetValue(n.NodeId, out var lastSeen) || now - lastSeen > FailedThreshold))
-            .ToList();
-
-        if (expired.Count == 0)
-            return;
-
-        foreach (var offlineNode in expired)
+        _lock.EnterReadLock();
+        try
         {
-            var successor = _hashRing.FindSuccessorNode(offlineNode, _clusterState.Nodes);
-            if (successor?.NodeId == _currentNode.NodeId)
-            {
-                Task.Run(async () =>
-                {
-                    await RemoveNode(offlineNode.NodeId);
-                });
-                
-                if (_gossipService != null)
-                {
-                    _ = _gossipService.BroadcastNodeRemovalProposalAsync(offlineNode.NodeId, _currentNode.NodeId);
-                }
-            }
+            var now = DateTime.UtcNow;
+
+            return _clusterState.Nodes
+                    .Where(n => 
+                        n.Status == NodeStatus.Suspect
+                        && (!_lastSeenUtc.TryGetValue(n.NodeId, out var lastSeen) || now - lastSeen > FailedThreshold)
+                        && _hashRing.FindSuccessorNode(n, _clusterState.Nodes)?.NodeId == _currentNode.NodeId
+                    )
+                    .Select(n => new ClusterNodeInfo
+                    {
+                        NodeId = n.NodeId,
+                        BaseUrl = n.BaseUrl,
+                        HashPosition = n.HashPosition,
+                        Status = n.Status
+                    }).ToList();
         }
+        finally { _lock.ExitReadLock(); }
     }
 
     public ClusterNodeInfo GetCurrentNode()
@@ -237,14 +226,8 @@ public class NodeStateService : INodeStateService
         finally { _lock.ExitWriteLock(); }
     }
 
-    public async Task RemoveNode(Guid nodeId)
+    public void RemoveNode(Guid nodeId)
     {
-        var targetNode = _clusterState.Nodes.FirstOrDefault(n => n.NodeId == nodeId);
-        if (targetNode != null && _rebalancingService != null)
-        {
-            await _rebalancingService.RebalanceOnNodeRemovalAsync(targetNode);
-        }
-
         _lock.EnterWriteLock();
         try
         {

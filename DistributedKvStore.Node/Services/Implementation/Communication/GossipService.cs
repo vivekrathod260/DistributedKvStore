@@ -376,7 +376,27 @@ public class GossipService : IGossipService
 
         Task.Run(async () =>
         {
-            await _nodeState.RemoveNode(proposal.OfflineNodeId);
+            try
+            {
+                var clusterState = _nodeState.GetClusterState();
+                var offlineNode = clusterState.Nodes.FirstOrDefault(n => n.NodeId == proposal.OfflineNodeId);
+                if (offlineNode == null || new[] { NodeStatus.Online, NodeStatus.Suspect, NodeStatus.Failed, NodeStatus.Leaving }.Contains(offlineNode.Status) == false)
+                {
+                    return;
+                }
+
+                using (var scope = _scopeFactory.CreateScope())
+                {
+                    var rebalancingService = scope.ServiceProvider.GetRequiredService<IRebalancingService>();
+                    await rebalancingService.RebalanceOnNodeRemovalAsync(offlineNode);
+                }
+
+                _nodeState.RemoveNode(proposal.OfflineNodeId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Applying node removal proposal for {OfflineNodeId} failed", proposal.OfflineNodeId);
+            }
         });
     }
 

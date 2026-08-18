@@ -47,6 +47,7 @@ public class HeartbeatService : BackgroundService
         using var scope = _serviceProvider.CreateScope();
         var nodeState = scope.ServiceProvider.GetRequiredService<INodeStateService>();
         var gossipService = scope.ServiceProvider.GetRequiredService<IGossipService>();
+        var rebalancingService = scope.ServiceProvider.GetRequiredService<IRebalancingService>();
         var httpClientFactory = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>();
 
         if (!nodeState.IsInitialized) return;
@@ -94,6 +95,31 @@ public class HeartbeatService : BackgroundService
                     .ToList();
 
                 await gossipService.BroadcastNodeSuspicionAsync(node.NodeId, verifiers.Select(v => v.NodeId).ToList());
+            }
+        }
+
+        await EvictExpiredSuspectsAsync(nodeState, gossipService, rebalancingService, currentNode);
+    }
+
+    private async Task EvictExpiredSuspectsAsync(
+        INodeStateService nodeState,
+        IGossipService gossipService,
+        IRebalancingService rebalancingService,
+        ClusterNodeInfo currentNode)
+    {
+        foreach (var stale in nodeState.GetExpiredSuspectsOwnedByCurrNode())
+        {
+            try
+            {
+                await gossipService.BroadcastNodeRemovalProposalAsync(stale.NodeId, currentNode.NodeId);
+                await rebalancingService.RebalanceOnNodeRemovalAsync(stale);
+                nodeState.RemoveNode(stale.NodeId);
+
+                _logger.LogWarning("Evicted expired suspect {NodeId} and proposed its removal to the cluster", stale.NodeId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Eviction of expired suspect {NodeId} failed; will retry on the next heartbeat tick", stale.NodeId);
             }
         }
     }

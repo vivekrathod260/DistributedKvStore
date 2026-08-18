@@ -100,7 +100,6 @@ public class ClusterManagementService : IClusterManagementService
 
     public async Task<ClusterState> RemoveNodeAsync(Guid nodeId)
     {
-        // Gossip removal
         var clusterState = _nodeState.GetClusterState();
         var targetNode = clusterState.Nodes.FirstOrDefault(n => n.NodeId == nodeId);
         if(targetNode == null || new[] { NodeStatus.Online, NodeStatus.Suspect, NodeStatus.Failed }.Contains(targetNode.Status) == false)
@@ -108,9 +107,11 @@ public class ClusterManagementService : IClusterManagementService
             _logger.LogWarning("Node {NodeId} not found in cluster or not in a removable state", nodeId);
             return clusterState;
         }
-        
+
         await _gossipService.BroadcastNodeRemovalProposalAsync(targetNode.NodeId, _nodeState.GetCurrentNode().NodeId);
-        await _nodeState.RemoveNode(nodeId);
+        await _rebalancingService.RebalanceOnNodeRemovalAsync(targetNode);
+
+        _nodeState.RemoveNode(nodeId);
 
         return _nodeState.GetClusterState();
     }
