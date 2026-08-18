@@ -99,17 +99,8 @@ public class ClusterManagementService : IClusterManagementService
             return clusterState;
         }
         
-        await _gossipService.BroadcastNodeStatusChangeAsync(new List<NodeStatusChange>
-        {
-            new()
-            {
-                NodeId = nodeId,
-                NewStatus = NodeStatus.Leaving
-            }
-        });
-
-        await _rebalancingService.RebalanceOnNodeRemovalAsync(targetNode);
-        _nodeState.RemoveNode(nodeId);
+        await _gossipService.BroadcastNodeRemovalProposalAsync(targetNode.NodeId, _nodeState.GetCurrentNode().NodeId);
+        await _nodeState.RemoveNode(nodeId);
 
         return _nodeState.GetClusterState();
     }

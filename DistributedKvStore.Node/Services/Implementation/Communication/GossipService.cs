@@ -68,7 +68,7 @@ public class GossipService : IGossipService
         }
     }
 
-    public Task ProcessGossipMessageAsync(GossipMessage message)
+    public async Task ProcessGossipMessageAsync(GossipMessage message)
     {
         if (!_processedMessages.ContainsKey(message.MessageId))
         {
@@ -78,34 +78,35 @@ public class GossipService : IGossipService
             // Receiving any gossip message is itself proof the sender is alive right now.
             _nodeState.TouchLastSeen(message.SenderNodeId);
 
-            if(message.Topic == GossipTopic.NodeStatusChange && message.Payload.NodeStatusChanges != null)
+            // Cluster Level Gossip Topics
+            if (message.Topic == GossipTopic.ClusterInit)
             {
-                // Apply state changes
+                ApplyClusterInit();
+            }
+            else if (message.Topic == GossipTopic.ReplicationFactorChange && message.Payload.ReplicationFactorChange != null)
+            {
+                ApplyReplicationFactorChange(message.Payload.ReplicationFactorChange);
+            }
+            // Node Level Gossip Topics
+            else if(message.Topic == GossipTopic.NodeStatusChange && message.Payload.NodeStatusChanges != null)
+            {
                 foreach (var change in message.Payload.NodeStatusChanges!)
                 {
+                    await _rebalancingService.ProcessGossipMessageAsync(message);
                     ApplyNodeStatusChange(change);
-                    _rebalancingService.ProcessGossipMessageAsync(message);
                 }
-            }
-            else if (message.Topic == GossipTopic.NodeSuspicion && message.Payload.NodeSuspicion != null)
-            {
-                ApplyNodeSuspicion(message.Payload.NodeSuspicion);
             }
             else if (message.Topic == GossipTopic.NodeJoin && message.Payload.NodeJoin != null)
             {
                 ApplyNodeJoin(message.Payload.NodeJoin);
             }
-            else if (message.Topic == GossipTopic.ClusterInit)
+            else if (message.Topic == GossipTopic.NodeSuspicion && message.Payload.NodeSuspicion != null)
             {
-                ApplyClusterInit();
+                ApplyNodeSuspicion(message.Payload.NodeSuspicion);
             }
             else if (message.Topic == GossipTopic.NodeRemovalProposal && message.Payload.NodeRemovalProposal != null)
             {
                 ApplyNodeRemovalProposal(message.Payload.NodeRemovalProposal);
-            }
-            else if (message.Topic == GossipTopic.ReplicationFactorChange && message.Payload.ReplicationFactorChange != null)
-            {
-                ApplyReplicationFactorChange(message.Payload.ReplicationFactorChange);
             }
         }
         else
@@ -119,7 +120,7 @@ public class GossipService : IGossipService
             _ = ForwardGossipAsync(message);
         }
 
-        return Task.CompletedTask;
+        return;
     }
 
     private async Task ForwardGossipAsync(GossipMessage message)
@@ -176,15 +177,9 @@ public class GossipService : IGossipService
         var clusterState = _nodeState.GetClusterState();
         var existingNode = clusterState.Nodes.FirstOrDefault(n => n.NodeId == change.NodeId);
 
+        // Handles status : Joining->Online, Suspect->Online, RemoveNode :Leaving, 
         if (existingNode != null)
         {
-            if (change.NewStatus == NodeStatus.Failed)
-            {
-                _logger.LogWarning("Node {NodeId} marked as failed via gossip", change.NodeId);
-                _nodeState.RemoveNode(change.NodeId);
-                return;
-            }
-
             _nodeState.UpdateNodeStatus(change.NodeId, change.NewStatus);
 
             if (change.NewStatus == NodeStatus.Online)
@@ -249,6 +244,7 @@ public class GossipService : IGossipService
         }
     }
 
+    // ####################### Node Suspicion Handling
     public async Task BroadcastNodeSuspicionAsync(Guid suspectedNodeId, List<Guid> verifierNodeIds)
     {
         var currentNode = _nodeState.GetCurrentNode();
@@ -302,7 +298,7 @@ public class GossipService : IGossipService
             .Where(n => n.NodeId == targetNode.NodeId)
             .FirstOrDefault();
 
-        if(suspectNode?.Status == NodeStatus.Online) return;
+        if(suspectNode?.Status == NodeStatus.Online) return; // Node has already been marked online by another verifier
 
         var reachable = await PingNodeAsync(targetNode.BaseUrl);
 
@@ -326,31 +322,6 @@ public class GossipService : IGossipService
         }
     }
 
-    // ####################### Cluster Init Handling
-    public async Task BroadcastClusterInitAsync()
-    {
-        var currentNode = _nodeState.GetCurrentNode();
-
-        var message = new GossipMessage
-        {
-            MessageId = Guid.NewGuid(),
-            SenderNodeId = currentNode.NodeId,
-            Topic = GossipTopic.ClusterInit,
-            Payload = new GossipPayload(),
-            TimestampUtc = DateTime.UtcNow
-        };
-
-        await BroadcastGossipAsync(message);
-    }
-
-    private void ApplyClusterInit()
-    {
-        if (_nodeState.IsInitialized) return;
-
-        _nodeState.MarkInitialized();
-        _logger.LogInformation("Cluster initialized via gossip");
-    }
-
     private async Task<bool> PingNodeAsync(string baseUrl)
     {
         try
@@ -368,6 +339,7 @@ public class GossipService : IGossipService
         }
     }
 
+    // ####################### Node Removal Proposal Handling
     public async Task BroadcastNodeRemovalProposalAsync(Guid offlineNodeId, Guid proposerNodeId)
     {
         var currentNode = _nodeState.GetCurrentNode();
@@ -395,9 +367,39 @@ public class GossipService : IGossipService
     {
         _logger.LogWarning("Received node removal proposal for {OfflineNodeId} from proposer {ProposerNodeId}",
             proposal.OfflineNodeId, proposal.ProposerNodeId);
-        _nodeState.RemoveNode(proposal.OfflineNodeId);
+
+        Task.Run(async () =>
+        {
+            await _nodeState.RemoveNode(proposal.OfflineNodeId);
+        });
     }
 
+    // ####################### Cluster Init Handling
+    public async Task BroadcastClusterInitAsync()
+    {
+        var currentNode = _nodeState.GetCurrentNode();
+
+        var message = new GossipMessage
+        {
+            MessageId = Guid.NewGuid(),
+            SenderNodeId = currentNode.NodeId,
+            Topic = GossipTopic.ClusterInit,
+            Payload = new GossipPayload(),
+            TimestampUtc = DateTime.UtcNow
+        };
+
+        await BroadcastGossipAsync(message);
+    }
+
+    private void ApplyClusterInit()
+    {
+        if (_nodeState.IsInitialized) return;
+
+        _nodeState.MarkInitialized();
+        _logger.LogInformation("Cluster initialized via gossip");
+    }
+
+    // ####################### Replication Factor Change Handling
     public async Task BroadcastReplicationFactorChangeAsync(int newReplicationFactor)
     {
         var currentNode = _nodeState.GetCurrentNode();

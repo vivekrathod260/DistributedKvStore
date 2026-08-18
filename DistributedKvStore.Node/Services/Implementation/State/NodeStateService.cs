@@ -13,7 +13,7 @@ public interface INodeStateService
     void UpdateClusterState(ClusterState state);
     void UpdateNodeStatus(Guid nodeId, NodeStatus status);
     void AddNode(ClusterNodeInfo node);
-    void RemoveNode(Guid nodeId);
+    Task RemoveNode(Guid nodeId);
     void TouchLastSeen(Guid nodeId);
     DateTime? GetLastSeenUtc(Guid nodeId);
     int GetReplicationFactor();
@@ -132,8 +132,11 @@ public class NodeStateService : INodeStateService
             var successor = _hashRing.FindSuccessorNode(offlineNode, _clusterState.Nodes);
             if (successor?.NodeId == _currentNode.NodeId)
             {
-                RemoveNode(offlineNode.NodeId);
-
+                Task.Run(async () =>
+                {
+                    await RemoveNode(offlineNode.NodeId);
+                });
+                
                 if (_gossipService != null)
                 {
                     _ = _gossipService.BroadcastNodeRemovalProposalAsync(offlineNode.NodeId, _currentNode.NodeId);
@@ -219,24 +222,22 @@ public class NodeStateService : INodeStateService
         finally { _lock.ExitWriteLock(); }
     }
 
-    public void RemoveNode(Guid nodeId)
+    public async Task RemoveNode(Guid nodeId)
     {
-        ClusterNodeInfo? removedNode = null;
+        var targetNode = _clusterState.Nodes.FirstOrDefault(n => n.NodeId == nodeId);
+        if (targetNode != null && _rebalancingService != null)
+        {
+            await _rebalancingService.RebalanceOnNodeRemovalAsync(targetNode);
+        }
 
         _lock.EnterWriteLock();
         try
         {
-            removedNode = _clusterState.Nodes.FirstOrDefault(n => n.NodeId == nodeId);
             _clusterState.Nodes.RemoveAll(n => n.NodeId == nodeId);
             _hashRing.BuildRing(_clusterState.Nodes);
             _lastSeenUtc.Remove(nodeId);
         }
         finally { _lock.ExitWriteLock(); }
-
-        if (removedNode != null && _rebalancingService != null)
-        {
-            _ = _rebalancingService.RebalanceOnNodeRemovalAsync(removedNode);
-        }
     }
 
     // Keeps the local last-seen tracking dictionary in sync with whatever node IDs are
