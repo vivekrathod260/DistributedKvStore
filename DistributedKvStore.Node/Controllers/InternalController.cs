@@ -83,6 +83,11 @@ public class InternalController : ControllerBase
     {
         _nodeState.UpdateClusterState(state);
 
+        if (state.IsInitialized && !_nodeState.IsInitialized)
+        {
+            _nodeState.MarkInitialized();
+        }
+
         await _rebalancingService.OnboardSelfAsync();
 
         var currentNode = _nodeState.GetCurrentNode();

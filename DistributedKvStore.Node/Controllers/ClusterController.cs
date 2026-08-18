@@ -53,13 +53,6 @@ public class ClusterController : ControllerBase
         return Ok(state);
     }
 
-    [HttpPost("restart-node")]
-    public async Task<IActionResult> RestartNode([FromBody] RestartNodeRequest request)
-    {
-        var state = await _clusterService.RestartNodeAsync(request.NodeId);
-        return Ok(state);
-    }
-
     [HttpPost("set-replication-factor")]
     public async Task<IActionResult> SetReplicationFactor([FromBody] SetReplicationFactorRequest request)
     {

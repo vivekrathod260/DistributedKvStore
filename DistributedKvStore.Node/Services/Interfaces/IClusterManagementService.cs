@@ -9,7 +9,6 @@ public interface IClusterManagementService
     Task<ClusterState> UninitializeClusterAsync();
     Task<ClusterState> AddNodeAsync(string baseUrl, Guid? nodeId = null);
     Task<ClusterState> RemoveNodeAsync(Guid nodeId);
-    Task<ClusterState> RestartNodeAsync(Guid nodeId);
     Task SetReplicationFactorAsync(int factor);
     Task ShutdownClusterAsync();
     Task ShutdownLocalNodeAsync();

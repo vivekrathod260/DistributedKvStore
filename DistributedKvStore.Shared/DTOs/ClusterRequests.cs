@@ -15,8 +15,3 @@ public class SetReplicationFactorRequest
 {
     public int ReplicationFactor { get; set; }
 }
-
-public class RestartNodeRequest
-{
-    public Guid NodeId { get; set; }
-}

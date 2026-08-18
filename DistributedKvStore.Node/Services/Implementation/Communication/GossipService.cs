@@ -14,7 +14,6 @@ public class GossipService : IGossipService
     private readonly INodeStateService _nodeState;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IServiceScopeFactory _scopeFactory;
-    private readonly IRebalancingService _rebalancingService;
     private readonly ILogger<GossipService> _logger;
     private readonly ConcurrentDictionary<Guid, DateTime> _processedMessages = new();
     private readonly ConcurrentDictionary<Guid, int> _forwardCounts = new();
@@ -26,13 +25,11 @@ public class GossipService : IGossipService
         INodeStateService nodeState,
         IHttpClientFactory httpClientFactory,
         IServiceScopeFactory scopeFactory,
-        IRebalancingService rebalancingService,
         ILogger<GossipService> logger)
     {
         _nodeState = nodeState;
         _httpClientFactory = httpClientFactory;
         _scopeFactory = scopeFactory;
-        _rebalancingService = rebalancingService;
         _logger = logger;
     }
 
@@ -45,7 +42,7 @@ public class GossipService : IGossipService
         var clusterState = _nodeState.GetClusterState();
 
         var somePeers = clusterState.Nodes
-            .Where(n => n.NodeId != currentNode.NodeId && n.Status == NodeStatus.Online)
+            .Where(n => n.NodeId != currentNode.NodeId && (n.Status == NodeStatus.Online || n.Status == NodeStatus.Joining))
             .OrderBy(_ => Random.Shared.Next()).Take(3).ToList();
 
         var tasks = somePeers.Select(peer => SendGossipToNodeAsync(message, peer.BaseUrl));
@@ -94,9 +91,14 @@ public class GossipService : IGossipService
             // Node Level Gossip Topics
             else if(message.Topic == GossipTopic.NodeStatusChange && message.Payload.NodeStatusChanges != null)
             {
+                using (var scope = _scopeFactory.CreateScope())
+                {
+                    var rebalancingService = scope.ServiceProvider.GetRequiredService<IRebalancingService>();
+                    await rebalancingService.ProcessGossipMessageAsync(message);
+                }
+
                 foreach (var change in message.Payload.NodeStatusChanges!)
                 {
-                    await _rebalancingService.ProcessGossipMessageAsync(message);
                     ApplyNodeStatusChange(change);
                 }
             }

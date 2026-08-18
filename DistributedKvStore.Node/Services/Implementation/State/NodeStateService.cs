@@ -123,7 +123,9 @@ public class NodeStateService : INodeStateService
                     BaseUrl = n.BaseUrl,
                     HashPosition = n.HashPosition,
                     Status = n.Status
-                }).ToList()
+                }).ToList(),
+                IsInitialized = _isInitialized,
+                InitializedAtUtc = _initializedAtUtc
             };
         }
         finally { _lock.ExitWriteLock(); }

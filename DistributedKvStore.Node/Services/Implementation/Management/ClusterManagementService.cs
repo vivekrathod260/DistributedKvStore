@@ -115,33 +115,6 @@ public class ClusterManagementService : IClusterManagementService
         return _nodeState.GetClusterState();
     }
 
-    public async Task<ClusterState> RestartNodeAsync(Guid nodeId)
-    {
-        var clusterState = _nodeState.GetClusterState();
-        var node = clusterState.Nodes.FirstOrDefault(n => n.NodeId == nodeId);
-
-        if (node == null)
-        {
-            _logger.LogWarning("Node {NodeId} not found in cluster", nodeId);
-            return clusterState;
-        }
-
-        _nodeState.UpdateNodeStatus(nodeId, NodeStatus.Online);
-
-        await _gossipService.BroadcastNodeStatusChangeAsync(new List<NodeStatusChange>
-        {
-            new()
-            {
-                NodeId = nodeId,
-                NewStatus = NodeStatus.Online,
-                BaseUrl = node.BaseUrl,
-                HashPosition = node.HashPosition
-            }
-        });
-
-        return _nodeState.GetClusterState();
-    }
-
     public async Task SetReplicationFactorAsync(int factor)
     {
         if (factor < 1)

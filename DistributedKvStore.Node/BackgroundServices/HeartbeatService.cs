@@ -61,6 +61,7 @@ public class HeartbeatService : BackgroundService
 
         var peers = clusterState.Nodes
             .Where(n => n.NodeId != currentNode.NodeId && n.Status != NodeStatus.Leaving)
+            .OrderBy(_ => Random.Shared.Next())
             .Take(2)
             .ToList(); // Joining, Online, Suspect only
 
