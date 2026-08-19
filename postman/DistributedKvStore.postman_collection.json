@@ -1,0 +1,604 @@
+{
+  "info": {
+    "_postman_id": "a1b2c3d4-0000-4000-8000-000000000001",
+    "name": "DistributedKvStore",
+    "description": "Collection for exercising the DistributedKvStore cluster.\n\n## Two ways in\n\n- **TestApi** (host port `6000`): the friendly external surface - `/key/*` for reads/writes, `/cluster/*` for admin. Routes internally through the client's hash ring / seed nodes.\n- **Node API** (host ports `5001`-`5010`): talk to one node directly via `api/data/*`, `api/cluster/*` and `internal/*`. Useful for verifying replication, per-node state, or endpoints TestApi doesn't expose (e.g. `api/cluster/uninitialize`).\n\n## Running with docker compose\n\n`docker compose up --build` starts 10 nodes (`node1`..`node10`) plus the TestApi, and a one-shot `cluster-init` container that starts the cluster, adds every node, and sets replication factor 3. So **the cluster is already initialized** - you can go straight to `TestApi > Key-Value > Create Key`.\n\n### Two kinds of URL (important)\n\n- `http://localhost:500N` - from **your machine** (published ports). Use these as the request URL.\n- `http://nodeN:8080` - from **inside the compose network**. Use these for any value the server resolves itself: `baseUrl` in Add Node, and the `?baseUrl=` query on Get Node Health / Get Node Cluster State. Sending `localhost` there makes the container dial itself and fail.\n\nBoth sets are collection variables: `nodeNBaseUrl` (host) and `nodeNInternalUrl` (in-network).\n\n### Running without docker (VS launch profiles)\n\nNodes bind `localhost:5001/5002/5003` directly, so host and internal URLs are the same - set `nodeNInternalUrl` to `http://localhost:500N` and run `Start Cluster` -> `Add Node` -> `Set Replication Factor` yourself.\n\nKey-value reads/writes return `503` until the cluster is initialized.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "testApiBaseUrl", "value": "http://localhost:6000", "type": "string" },
+    { "key": "nodeApiBaseUrl", "value": "http://localhost:5001", "type": "string" },
+    { "key": "node1BaseUrl", "value": "http://localhost:5001", "type": "string" },
+    { "key": "node2BaseUrl", "value": "http://localhost:5002", "type": "string" },
+    { "key": "node3BaseUrl", "value": "http://localhost:5003", "type": "string" },
+    { "key": "node10BaseUrl", "value": "http://localhost:5010", "type": "string" },
+    { "key": "node1InternalUrl", "value": "http://node1:8080", "type": "string" },
+    { "key": "node2InternalUrl", "value": "http://node2:8080", "type": "string" },
+    { "key": "node3InternalUrl", "value": "http://node3:8080", "type": "string" },
+    { "key": "node10InternalUrl", "value": "http://node10:8080", "type": "string" },
+    { "key": "key", "value": "user:123", "type": "string" },
+    { "key": "value", "value": "hello world", "type": "string" },
+    { "key": "replicationFactor", "value": "3", "type": "string" },
+    { "key": "node1Id", "value": "9e4fa7d8-6a25-4351-9a17-64f3ae8e6ef4", "type": "string" },
+    { "key": "node2Id", "value": "11cdbc8d-6b87-4dad-9fc1-d550c5659830", "type": "string" },
+    { "key": "node10Id", "value": "f51336c9-247d-48d8-801f-8134545bcc9c", "type": "string" },
+    { "key": "nodeId", "value": "f51336c9-247d-48d8-801f-8134545bcc9c", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "TestApi",
+      "description": "External-facing surface on {{testApiBaseUrl}} (host port 6000). Wraps DistributedKvStore.Client and resolves the cluster via its configured seed nodes (node1/node2/node3).",
+      "item": [
+        {
+          "name": "Key-Value",
+          "item": [
+            {
+              "name": "Get Key",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{testApiBaseUrl}}/key/{{key}}",
+                  "host": ["{{testApiBaseUrl}}"],
+                  "path": ["key", "{{key}}"]
+                },
+                "description": "200 with { key, value, lastUpdatedUtc }, 404 if the key is missing or tombstoned, 503 if the cluster isn't initialized."
+              },
+              "response": []
+            },
+            {
+              "name": "Create Key",
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json", "type": "text" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"key\": \"{{key}}\",\n  \"value\": \"{{value}}\"\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "url": {
+                  "raw": "{{testApiBaseUrl}}/key",
+                  "host": ["{{testApiBaseUrl}}"],
+                  "path": ["key"]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Update Key",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json", "type": "text" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"key\": \"{{key}}\",\n  \"value\": \"{{value}} (updated)\"\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "url": {
+                  "raw": "{{testApiBaseUrl}}/key",
+                  "host": ["{{testApiBaseUrl}}"],
+                  "path": ["key"]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Delete Key",
+              "request": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{testApiBaseUrl}}/key/{{key}}",
+                  "host": ["{{testApiBaseUrl}}"],
+                  "path": ["key", "{{key}}"]
+                }
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "Cluster Management",
+          "item": [
+            {
+              "name": "Get Cluster State",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{testApiBaseUrl}}/cluster/state",
+                  "host": ["{{testApiBaseUrl}}"],
+                  "path": ["cluster", "state"]
+                },
+                "description": "Cluster state as seen by whichever seed node answers first. With docker compose you should see 10 nodes and replicationFactor 3."
+              },
+              "response": []
+            },
+            {
+              "name": "Get Node Cluster State",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{testApiBaseUrl}}/cluster/state/node?baseUrl={{node2InternalUrl}}",
+                  "host": ["{{testApiBaseUrl}}"],
+                  "path": ["cluster", "state", "node"],
+                  "query": [
+                    { "key": "baseUrl", "value": "{{node2InternalUrl}}" }
+                  ]
+                },
+                "description": "Cluster state from one specific node instead of an arbitrary seed - handy for spotting gossip divergence.\n\nbaseUrl is dialled by the TestApi container, so under docker compose it must be the in-network URL (http://node2:8080), not localhost."
+              },
+              "response": []
+            },
+            {
+              "name": "Start Cluster",
+              "request": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{testApiBaseUrl}}/cluster/start",
+                  "host": ["{{testApiBaseUrl}}"],
+                  "path": ["cluster", "start"]
+                },
+                "description": "Marks the cluster initialized; must run before key-value reads/writes succeed (they 503 until then).\n\nUnder docker compose the cluster-init container already did this."
+              },
+              "response": []
+            },
+            {
+              "name": "Add Node",
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json", "type": "text" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"baseUrl\": \"{{node10InternalUrl}}\",\n  \"nodeId\": \"{{node10Id}}\"\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "url": {
+                  "raw": "{{testApiBaseUrl}}/cluster/nodes",
+                  "host": ["{{testApiBaseUrl}}"],
+                  "path": ["cluster", "nodes"]
+                },
+                "description": "nodeId is optional - send null to let the node keep/generate its own.\n\nbaseUrl is dialled from inside the cluster, so use the in-network URL under docker compose. All 10 nodes are added at startup already; pair this with Remove Node to watch a node leave and rejoin."
+              },
+              "response": []
+            },
+            {
+              "name": "Remove Node",
+              "request": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{testApiBaseUrl}}/cluster/nodes/{{nodeId}}",
+                  "host": ["{{testApiBaseUrl}}"],
+                  "path": ["cluster", "nodes", "{{nodeId}}"]
+                },
+                "description": "nodeId defaults to node10 (f51336c9-...), the safest one to drop. The route requires a well-formed GUID or you get a 404."
+              },
+              "response": []
+            },
+            {
+              "name": "Set Replication Factor",
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json", "type": "text" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"replicationFactor\": {{replicationFactor}}\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "url": {
+                  "raw": "{{testApiBaseUrl}}/cluster/replication-factor",
+                  "host": ["{{testApiBaseUrl}}"],
+                  "path": ["cluster", "replication-factor"]
+                },
+                "description": "replicationFactor = additional replicas beyond the primary (k). Total copies per key = k + 1. Must be >= 1."
+              },
+              "response": []
+            },
+            {
+              "name": "Get Node Health",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{testApiBaseUrl}}/cluster/health?baseUrl={{node1InternalUrl}}",
+                  "host": ["{{testApiBaseUrl}}"],
+                  "path": ["cluster", "health"],
+                  "query": [
+                    { "key": "baseUrl", "value": "{{node1InternalUrl}}" }
+                  ]
+                },
+                "description": "Proxies a heartbeat to the given node. baseUrl is dialled by the TestApi container - use the in-network URL under docker compose."
+              },
+              "response": []
+            },
+            {
+              "name": "Shutdown Cluster",
+              "request": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{testApiBaseUrl}}/cluster/shutdown",
+                  "host": ["{{testApiBaseUrl}}"],
+                  "path": ["cluster", "shutdown"]
+                },
+                "description": "Fans out /internal/shutdown to every node. Destructive - the cluster stops serving until you restart it."
+              },
+              "response": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Node API",
+      "description": "Talk to one node process directly on {{nodeApiBaseUrl}} (defaults to node1 / host port 5001). Point it at any node by changing nodeApiBaseUrl to http://localhost:5002 ... http://localhost:5010.",
+      "item": [
+        {
+          "name": "Data (api/data)",
+          "item": [
+            {
+              "name": "Get Key",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{nodeApiBaseUrl}}/api/data/{{key}}",
+                  "host": ["{{nodeApiBaseUrl}}"],
+                  "path": ["api", "data", "{{key}}"]
+                },
+                "description": "Reads through this node (it forwards to the owner if it isn't one). Aim this at each node in turn to see which ones hold a replica."
+              },
+              "response": []
+            },
+            {
+              "name": "Create Key",
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json", "type": "text" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"key\": \"{{key}}\",\n  \"value\": \"{{value}}\"\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "url": {
+                  "raw": "{{nodeApiBaseUrl}}/api/data",
+                  "host": ["{{nodeApiBaseUrl}}"],
+                  "path": ["api", "data"]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Update Key",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json", "type": "text" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"key\": \"{{key}}\",\n  \"value\": \"{{value}} (updated)\"\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "url": {
+                  "raw": "{{nodeApiBaseUrl}}/api/data",
+                  "host": ["{{nodeApiBaseUrl}}"],
+                  "path": ["api", "data"]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Delete Key",
+              "request": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{nodeApiBaseUrl}}/api/data/{{key}}",
+                  "host": ["{{nodeApiBaseUrl}}"],
+                  "path": ["api", "data", "{{key}}"]
+                }
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "Cluster (api/cluster)",
+          "item": [
+            {
+              "name": "Get Cluster State",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{nodeApiBaseUrl}}/api/cluster/state",
+                  "host": ["{{nodeApiBaseUrl}}"],
+                  "path": ["api", "cluster", "state"]
+                },
+                "description": "This node's own view of the ring. Also doubles as a liveness check - it answers before the cluster is initialized."
+              },
+              "response": []
+            },
+            {
+              "name": "Start Cluster",
+              "request": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{nodeApiBaseUrl}}/api/cluster/start",
+                  "host": ["{{nodeApiBaseUrl}}"],
+                  "path": ["api", "cluster", "start"]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Uninitialize Cluster",
+              "request": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{nodeApiBaseUrl}}/api/cluster/uninitialize",
+                  "host": ["{{nodeApiBaseUrl}}"],
+                  "path": ["api", "cluster", "uninitialize"]
+                },
+                "description": "Not exposed via TestApi - flips this node (and, via gossip, the rest of the cluster) back to uninitialized, so reads/writes start returning 503 again."
+              },
+              "response": []
+            },
+            {
+              "name": "Add Node",
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json", "type": "text" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"baseUrl\": \"{{node10InternalUrl}}\",\n  \"nodeId\": \"{{node10Id}}\"\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "url": {
+                  "raw": "{{nodeApiBaseUrl}}/api/cluster/add-node",
+                  "host": ["{{nodeApiBaseUrl}}"],
+                  "path": ["api", "cluster", "add-node"]
+                },
+                "description": "baseUrl is dialled by the node you're calling, so under docker compose it must be the in-network URL (http://node10:8080). Set nodeId to null to let the joining node keep its own."
+              },
+              "response": []
+            },
+            {
+              "name": "Remove Node",
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json", "type": "text" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"nodeId\": \"{{nodeId}}\"\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "url": {
+                  "raw": "{{nodeApiBaseUrl}}/api/cluster/remove-node",
+                  "host": ["{{nodeApiBaseUrl}}"],
+                  "path": ["api", "cluster", "remove-node"]
+                },
+                "description": "Unlike TestApi's DELETE /cluster/nodes/{nodeId}, the Node API takes nodeId in the request body."
+              },
+              "response": []
+            },
+            {
+              "name": "Set Replication Factor",
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json", "type": "text" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"replicationFactor\": {{replicationFactor}}\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "url": {
+                  "raw": "{{nodeApiBaseUrl}}/api/cluster/set-replication-factor",
+                  "host": ["{{nodeApiBaseUrl}}"],
+                  "path": ["api", "cluster", "set-replication-factor"]
+                },
+                "description": "400 if replicationFactor < 1. The change propagates to the other nodes by gossip."
+              },
+              "response": []
+            },
+            {
+              "name": "Shutdown Cluster",
+              "request": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{nodeApiBaseUrl}}/api/cluster/shutdown",
+                  "host": ["{{nodeApiBaseUrl}}"],
+                  "path": ["api", "cluster", "shutdown"]
+                }
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "Internal (node-to-node, advanced)",
+          "description": "Normally only called by other nodes, not humans. Useful for manually probing gossip / replication / migration while debugging.",
+          "item": [
+            {
+              "name": "Heartbeat",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{nodeApiBaseUrl}}/internal/heartbeat",
+                  "host": ["{{nodeApiBaseUrl}}"],
+                  "path": ["internal", "heartbeat"]
+                },
+                "description": "Returns { nodeId, timestampUtc } - the quickest way to confirm which node a port maps to."
+              },
+              "response": []
+            },
+            {
+              "name": "Heartbeat Proxy",
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json", "type": "text" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"targetNodeId\": \"{{node2Id}}\"\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "url": {
+                  "raw": "{{nodeApiBaseUrl}}/internal/heartbeat-proxy",
+                  "host": ["{{nodeApiBaseUrl}}"],
+                  "path": ["internal", "heartbeat-proxy"]
+                },
+                "description": "Asks this node to probe targetNodeId on your behalf and report { reachable }. Returns reachable:false (not an error) if the target isn't in this node's cluster state."
+              },
+              "response": []
+            },
+            {
+              "name": "Replication (apply one op)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json", "type": "text" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"key\": \"{{key}}\",\n  \"value\": \"{{value}} (replicated)\",\n  \"operationType\": 0,\n  \"timestampUtc\": \"2026-08-19T00:00:00Z\",\n  \"hash\": 0\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "url": {
+                  "raw": "{{nodeApiBaseUrl}}/internal/replication",
+                  "host": ["{{nodeApiBaseUrl}}"],
+                  "path": ["internal", "replication"]
+                },
+                "description": "What a primary sends to each replica. OperationType: Put=0, Update=1, Delete=2. Bump timestampUtc past the record's lastUpdatedUtc or the write may be discarded as stale."
+              },
+              "response": []
+            },
+            {
+              "name": "Migrate Out",
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json", "type": "text" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"requestingNodeId\": \"{{node1Id}}\",\n  \"rangeStart\": 0,\n  \"rangeEnd\": 18446744073709551615\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "url": {
+                  "raw": "{{nodeApiBaseUrl}}/internal/migrate-out",
+                  "host": ["{{nodeApiBaseUrl}}"],
+                  "path": ["internal", "migrate-out"]
+                },
+                "description": "Returns the records this node holds in the hash range [rangeStart, rangeEnd]. The default range is the whole ring (ulong.MaxValue), i.e. dump everything this node stores."
+              },
+              "response": []
+            },
+            {
+              "name": "Migrate (push in)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json", "type": "text" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"records\": [\n    {\n      \"hash\": 0,\n      \"key\": \"{{key}}\",\n      \"value\": \"{{value}} (migrated)\",\n      \"lastUpdatedUtc\": \"2026-08-19T00:00:00Z\",\n      \"isDeleted\": false\n    }\n  ],\n  \"isComplete\": true\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "url": {
+                  "raw": "{{nodeApiBaseUrl}}/internal/migrate",
+                  "host": ["{{nodeApiBaseUrl}}"],
+                  "path": ["internal", "migrate"]
+                },
+                "description": "Bulk-inserts records into this node. Send \"records\": [] for a no-op. Paste the body of a Migrate Out response here to move data by hand."
+              },
+              "response": []
+            },
+            {
+              "name": "Push Cluster State",
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json", "type": "text" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"replicationFactor\": {{replicationFactor}},\n  \"nodes\": [\n    {\n      \"nodeId\": \"{{node1Id}}\",\n      \"baseUrl\": \"{{node1InternalUrl}}\",\n      \"hashPosition\": 0,\n      \"status\": 0\n    }\n  ],\n  \"isInitialized\": true,\n  \"initializedAtUtc\": null\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "url": {
+                  "raw": "{{nodeApiBaseUrl}}/internal/cluster-state",
+                  "host": ["{{nodeApiBaseUrl}}"],
+                  "path": ["internal", "cluster-state"]
+                },
+                "description": "Overwrites the receiving node's cluster state and triggers RebalancingService.OnboardSelfAsync. NodeStatus: Online=0, Joining=1, Suspect=2, Failed=3, Leaving=4.\n\nDestructive - the nodes array replaces that node's whole view of the ring, so send the full membership list (copy one from Get Cluster State), not the single-node example."
+              },
+              "response": []
+            },
+            {
+              "name": "Gossip (example: NodeJoin)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json", "type": "text" }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"messageId\": \"11111111-1111-1111-1111-111111111111\",\n  \"senderNodeId\": \"{{node1Id}}\",\n  \"topic\": 2,\n  \"payload\": {\n    \"nodeJoin\": {\n      \"nodeId\": \"{{node10Id}}\",\n      \"baseUrl\": \"{{node10InternalUrl}}\",\n      \"hashPosition\": 0\n    }\n  },\n  \"timestampUtc\": \"2026-08-19T00:00:00Z\"\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "url": {
+                  "raw": "{{nodeApiBaseUrl}}/internal/gossip",
+                  "host": ["{{nodeApiBaseUrl}}"],
+                  "path": ["internal", "gossip"]
+                },
+                "description": "GossipTopic: NodeStatusChange=0, NodeSuspicion=1, NodeJoin=2, NodeRemovalProposal=3, ReplicationFactorChange=4, ClusterInit=5, ClusterUninit=6.\n\nOnly the payload field matching the topic needs to be set - nodeStatusChanges (array), nodeSuspicion, nodeJoin, nodeRemovalProposal, replicationFactorChange. Messages are deduped by messageId, so change it on every send."
+              },
+              "response": []
+            },
+            {
+              "name": "Shutdown (local node)",
+              "request": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{nodeApiBaseUrl}}/internal/shutdown",
+                  "host": ["{{nodeApiBaseUrl}}"],
+                  "path": ["internal", "shutdown"]
+                },
+                "description": "Shuts down just this node, leaving the rest of the cluster up - the way to simulate a single-node failure."
+              },
+              "response": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
